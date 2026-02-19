@@ -4,6 +4,8 @@ import { loadConfig } from "./config";
 import { initLogger, getLogger } from "./logger";
 import { McpClient } from "./mcp-client";
 import { createServer } from "./server";
+import { discoverMcpExecutable } from "./mcp-discovery";
+import { runInteractiveSetup } from "./interactive-setup";
 
 /**
  * 시작 배너 출력
@@ -58,6 +60,58 @@ async function gracefulShutdown(
 }
 
 /**
+ * MCP 실행 파일 경로를 자동으로 찾거나 사용자에게 물어봄
+ */
+async function resolveCommand(configCommand: string): Promise<string> {
+  const logger = getLogger();
+  
+  // 1. 자동 탐색
+  const discovered = await discoverMcpExecutable(configCommand);
+  if (discovered) {
+    logger.info(`MCP exe 발견: ${discovered}`);
+    return discovered;
+  }
+  
+  // 2. 인터랙티브 설정 (터미널에서 실행 중일 때만)
+  if (process.stdin.isTTY) {
+    logger.info("MCP exe를 찾지 못했습니다. 인터랙티브 설정을 시작합니다.");
+    const userPath = await runInteractiveSetup();
+    if (userPath) return userPath;
+  }
+  
+  // 3. 실패
+  printFriendlyError(configCommand);
+  process.exit(1);
+}
+
+/**
+ * MCP exe를 찾지 못했을 때 친절한 에러 메시지 출력
+ */
+function printFriendlyError(command: string): void {
+  console.error('');
+  console.error('╔══════════════════════════════════════════════════════════╗');
+  console.error('║  ❌ powerbi-modeling-mcp.exe를 찾을 수 없습니다        ║');
+  console.error('╚══════════════════════════════════════════════════════════╝');
+  console.error('');
+  console.error(`  찾으려는 파일: ${command}`);
+  console.error('');
+  console.error('  해결 방법:');
+  console.error('');
+  console.error('  1️⃣  config.yaml 파일에서 경로를 직접 지정:');
+  console.error('     mcp:');
+  console.error('       command: "C:\\경로\\powerbi-modeling-mcp.exe"');
+  console.error('');
+  console.error('  2️⃣  환경변수로 지정:');
+  console.error('     set MCP_COMMAND=C:\\경로\\powerbi-modeling-mcp.exe');
+  console.error('');
+  console.error('  3️⃣  exe 파일을 Bridge와 같은 폴더에 복사');
+  console.error('');
+  console.error('  4️⃣  CLI 인수로 지정:');
+  console.error('     pbi-mcp-bridge.exe --mcp-command "C:\\경로\\powerbi-modeling-mcp.exe"');
+  console.error('');
+}
+
+/**
  * 메인 함수
  */
 async function main(): Promise<void> {
@@ -72,16 +126,19 @@ async function main(): Promise<void> {
     logger.info("Starting Copilot + Power BI Desktop MCP Bridge...");
     logger.debug("Configuration loaded", config);
 
-    // 3. MCP 클라이언트 초기화
+    // 3. MCP 실행 파일 경로 확인
+    const mcpCommand = await resolveCommand(config.mcp.command);
+
+    // 4. MCP 클라이언트 초기화
     const mcpClient = new McpClient(
-      config.mcp.command,
+      mcpCommand,
       config.mcp.args,
       config.mcp.cwd,
       config.mcp.startupTimeoutMs,
       config.mcp.requestTimeoutMs
     );
 
-    // 4. MCP 프로세스 시작
+    // 5. MCP 프로세스 시작
     try {
       await mcpClient.start();
       logger.info("MCP process started successfully");
@@ -90,10 +147,10 @@ async function main(): Promise<void> {
       logger.warn("Bridge will start, but MCP requests will fail until process is running");
     }
 
-    // 5. Express 서버 생성
+    // 6. Express 서버 생성
     const app = createServer(config, mcpClient);
 
-    // 6. HTTP 서버 시작
+    // 7. HTTP 서버 시작
     const server = http.createServer(app);
 
     server.listen(config.server.port, config.server.host, () => {
@@ -109,11 +166,11 @@ async function main(): Promise<void> {
       }
     });
 
-    // 7. 시그널 핸들링
+    // 8. 시그널 핸들링
     process.on("SIGTERM", () => gracefulShutdown(server, mcpClient, "SIGTERM"));
     process.on("SIGINT", () => gracefulShutdown(server, mcpClient, "SIGINT"));
 
-    // 8. 에러 핸들링
+    // 9. 에러 핸들링
     process.on("uncaughtException", (error) => {
       logger.error("Uncaught exception:", error);
       gracefulShutdown(server, mcpClient, "uncaughtException");
@@ -123,7 +180,7 @@ async function main(): Promise<void> {
       logger.error("Unhandled rejection at:", promise, "reason:", reason);
     });
 
-    // 9. 서버 에러 핸들링
+    // 10. 서버 에러 핸들링
     server.on("error", (error: NodeJS.ErrnoException) => {
       if (error.code === "EADDRINUSE") {
         logger.error(

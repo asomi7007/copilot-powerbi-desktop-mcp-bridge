@@ -82,9 +82,32 @@ export class McpClient {
           this.handleProcessExit();
         });
 
-        this.process.on("error", (error: Error) => {
-          logger.error(`MCP process error: ${error.message}`);
+        this.process.on("error", (error: NodeJS.ErrnoException) => {
           this.state = McpProcessState.ERROR;
+          
+          // 친절한 에러 메시지 출력
+          if (error.code === "ENOENT") {
+            logger.error(`MCP 실행 파일을 찾을 수 없습니다: ${this.command}`);
+            logger.error("해결 방법:");
+            logger.error("  1. config.yaml에서 올바른 경로를 지정하세요");
+            logger.error("  2. 환경변수 MCP_COMMAND를 설정하세요");
+            logger.error("  3. exe 파일을 Bridge와 같은 폴더에 복사하세요");
+          } else if (error.code === "EACCES" || error.code === "EPERM") {
+            logger.error(`MCP 실행 파일에 대한 실행 권한이 없습니다: ${this.command}`);
+            logger.error("해결 방법:");
+            logger.error("  1. 파일 속성에서 '읽기 전용' 해제를 확인하세요");
+            logger.error("  2. 관리자 권한으로 실행해보세요");
+            logger.error("  3. 바이러스 백신 소프트웨어가 차단하는지 확인하세요");
+          } else if (error.code === "ENOTDIR") {
+            logger.error(`잘못된 경로입니다: ${this.command}`);
+            logger.error("경로에 디렉토리가 아닌 파일이 포함되어 있습니다.");
+          } else {
+            logger.error(`MCP 프로세스 시작 실패: ${error.message}`);
+            if (error.code) {
+              logger.error(`에러 코드: ${error.code}`);
+            }
+          }
+          
           this.handleProcessExit();
         });
 
