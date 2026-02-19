@@ -114,7 +114,14 @@ export class McpClient {
         // 프로세스가 시작되면 성공으로 간주
         this.state = McpProcessState.RUNNING;
         clearTimeout(startupTimeout);
-        logger.info(`MCP process started with PID: ${this.process.pid}`);
+        
+        // PID는 spawn 직후 undefined일 수 있으므로 확인
+        const pid = this.process.pid;
+        if (pid) {
+          logger.info(`MCP process started with PID: ${pid}`);
+        } else {
+          logger.info(`MCP process started (PID pending...)`);
+        }
         resolve();
       } catch (error) {
         clearTimeout(startupTimeout);

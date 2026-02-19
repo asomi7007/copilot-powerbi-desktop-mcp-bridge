@@ -64,7 +64,11 @@ export async function discoverMcpExecutable(configCommand?: string): Promise<str
           const serverDir = path.join(vscodeExtDir, ext, 'server');
           const exePath = path.join(serverDir, 'powerbi-modeling-mcp.exe');
           if (fs.existsSync(exePath)) {
-            return exePath; // 즉시 반환!
+            // 반드시 exe 파일 전체 경로인지 확인 (디렉토리가 아닌지)
+            const stat = fs.statSync(exePath);
+            if (stat.isFile()) {
+              return exePath; // 파일 전체 경로 반환
+            }
           }
         }
       } catch (err) {
@@ -88,7 +92,11 @@ export async function discoverMcpExecutable(configCommand?: string): Promise<str
           const serverDir = path.join(vscodeInsidersDir, ext, 'server');
           const exePath = path.join(serverDir, 'powerbi-modeling-mcp.exe');
           if (fs.existsSync(exePath)) {
-            return exePath;
+            // 반드시 exe 파일 전체 경로인지 확인 (디렉토리가 아닌지)
+            const stat = fs.statSync(exePath);
+            if (stat.isFile()) {
+              return exePath; // 파일 전체 경로 반환
+            }
           }
         }
       } catch (err) {
@@ -132,7 +140,10 @@ export async function discoverMcpExecutable(configCommand?: string): Promise<str
     try {
       const fullPath = path.join(dir, exeName);
       if (fs.existsSync(fullPath)) {
-        return fullPath;
+        const stat = fs.statSync(fullPath);
+        if (stat.isFile()) {
+          return fullPath; // 파일 전체 경로 반환
+        }
       }
     } catch (error) {
       // 접근 권한이 없는 경로는 무시
@@ -146,7 +157,10 @@ export async function discoverMcpExecutable(configCommand?: string): Promise<str
     try {
       const fullPath = path.join(dir, exeName);
       if (fs.existsSync(fullPath)) {
-        return fullPath;
+        const stat = fs.statSync(fullPath);
+        if (stat.isFile()) {
+          return fullPath; // 파일 전체 경로 반환
+        }
       }
     } catch (error) {
       // 접근 권한이 없는 경로는 무시

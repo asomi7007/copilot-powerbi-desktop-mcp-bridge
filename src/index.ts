@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import * as http from "http";
+import * as fs from "fs";
+import * as path from "path";
+import * as yaml from "yaml";
 import { loadConfig } from "./config";
 import { initLogger, getLogger } from "./logger";
 import { McpClient } from "./mcp-client";
@@ -21,6 +24,8 @@ function printBanner(port: number, host: string, mcpCommand: string): void {
   console.log(`📡 MCP Command:    ${mcpCommand}`);
   console.log(`📊 Health Check:   http://${host}:${port}/health`);
   console.log(`📝 MCP Endpoint:   POST http://${host}:${port}/mcp`);
+  console.log("");
+  console.log("💡 설정 변경:      --setup 인수로 재설정 가능");
   console.log("");
   console.log("Press Ctrl+C to stop");
   console.log("═══════════════════════════════════════════════════════════");
@@ -124,10 +129,111 @@ function printFriendlyError(command: string): void {
 }
 
 /**
+ * --reset-config 처리: 설정 초기화
+ */
+function handleResetConfig(): void {
+  console.log("");
+  console.log("╔═══════════════════════════════════════════════════════════╗");
+  console.log("║   🔄 설정 초기화                                         ║");
+  console.log("╚═══════════════════════════════════════════════════════════╝");
+  console.log("");
+
+  const configPath = path.join(process.cwd(), "config.yaml");
+  const examplePath = path.join(process.cwd(), "config.example.yaml");
+
+  // 기존 config.yaml 백업
+  if (fs.existsSync(configPath)) {
+    const backupPath = `${configPath}.bak`;
+    try {
+      fs.copyFileSync(configPath, backupPath);
+      console.log(`📦 기존 설정을 백업했습니다: ${backupPath}`);
+    } catch (error) {
+      console.warn(`⚠️  백업 실패: ${error}`);
+    }
+  }
+
+  // config.example.yaml을 config.yaml로 복사
+  if (fs.existsSync(examplePath)) {
+    try {
+      fs.copyFileSync(examplePath, configPath);
+      console.log(`✅ 설정이 초기화되었습니다: ${configPath}`);
+      console.log("");
+      console.log("이제 서버를 다시 시작하면 기본 설정이 적용됩니다.");
+    } catch (error) {
+      console.error(`❌ 초기화 실패: ${error}`);
+      process.exit(1);
+    }
+  } else {
+    console.warn("⚠️  config.example.yaml을 찾을 수 없습니다.");
+    console.log("설정 파일을 직접 생성해주세요.");
+  }
+
+  console.log("");
+  process.exit(0);
+}
+
+/**
+ * --setup/--reconfigure 처리: 인터랙티브 설정 마법사 강제 실행
+ */
+async function handleSetup(): Promise<void> {
+  console.log("");
+  console.log("╔═══════════════════════════════════════════════════════════╗");
+  console.log("║   🔧 설정 마법사                                         ║");
+  console.log("╚═══════════════════════════════════════════════════════════╝");
+  console.log("");
+
+  const configPath = path.join(process.cwd(), "config.yaml");
+
+  // 기존 config.yaml 백업
+  if (fs.existsSync(configPath)) {
+    const backupPath = `${configPath}.bak`;
+    try {
+      fs.copyFileSync(configPath, backupPath);
+      console.log(`📦 기존 설정을 백업했습니다: ${backupPath}`);
+      console.log("");
+    } catch (error) {
+      console.warn(`⚠️  백업 실패: ${error}`);
+    }
+  }
+
+  // 인터랙티브 설정 실행
+  const mcpPath = await runInteractiveSetup();
+
+  if (mcpPath) {
+    console.log("");
+    console.log("✅ 설정이 완료되었습니다!");
+    console.log("");
+    console.log("이제 서버를 시작합니다...");
+    console.log("");
+    // 설정 완료 후 정상 서버 시작 (main 함수 호출)
+    await main();
+  } else {
+    console.log("");
+    console.log("설정이 취소되었습니다.");
+    process.exit(0);
+  }
+}
+
+/**
  * 메인 함수
  */
 async function main(): Promise<void> {
   try {
+    // CLI 인수 확인
+    const args = process.argv.slice(2);
+
+    // --reset-config 인수 처리
+    if (args.includes("--reset-config")) {
+      handleResetConfig();
+      return;
+    }
+
+    // --setup 또는 --reconfigure 인수 처리
+    if (args.includes("--setup") || args.includes("--reconfigure")) {
+      await handleSetup();
+      return;
+    }
+
     // 1. 설정 로드
     const config = loadConfig();
 
