@@ -1,0 +1,23 @@
+# Copilot + Power BI Desktop MCP Bridge 설정
+server:
+  port: 5050
+  host: "127.0.0.1"
+
+mcp:
+  # powerbi-modeling-mcp.exe 경로
+  command: "powerbi-modeling-mcp.exe"
+  args: []
+  # 작업 디렉토리 (비워두면 Bridge 실행 위치)
+  # cwd: "C:\\path\\to\\mcp"
+  startupTimeoutMs: 10000
+  requestTimeoutMs: 30000
+
+security:
+  # API Key 인증 (빈 값이면 인증 비활성화)
+  # apiKey: "your-secret-key-here"
+  corsOrigins:
+    - "*"
+
+logging:
+  level: "info"  # debug, info, warn, error
+  # file: "logs/bridge.log"

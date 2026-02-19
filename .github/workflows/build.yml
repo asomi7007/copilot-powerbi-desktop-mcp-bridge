@@ -1,0 +1,79 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build TypeScript
+        run: npm run build
+      
+      - name: Build executable with pkg
+        run: npx pkg dist/index.js --targets node20-win-x64 --output pbi-mcp-bridge.exe --config package.json
+      
+      - name: Create release package
+        shell: pwsh
+        run: |
+          # 릴리스 패키지 디렉토리 생성
+          New-Item -ItemType Directory -Path release-package -Force
+          
+          # 파일 복사
+          Copy-Item pbi-mcp-bridge.exe release-package\
+          Copy-Item config.example.yaml release-package\
+          Copy-Item README.md release-package\
+          Copy-Item LICENSE release-package\
+          
+          # scripts 폴더 복사
+          New-Item -ItemType Directory -Path release-package\scripts -Force
+          Copy-Item scripts\*.ps1 release-package\scripts\
+          
+          # ZIP 생성
+          $version = "${{ github.ref_name }}"
+          if ($version -eq "") {
+            $version = "dev"
+          }
+          $zipName = "pbi-mcp-bridge-win-x64-$version.zip"
+          Compress-Archive -Path release-package\* -DestinationPath $zipName
+          
+          Write-Host "Created: $zipName"
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pbi-mcp-bridge-win-x64
+          path: |
+            pbi-mcp-bridge.exe
+            pbi-mcp-bridge-*.zip
+      
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pbi-mcp-bridge-*.zip
+            pbi-mcp-bridge.exe
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

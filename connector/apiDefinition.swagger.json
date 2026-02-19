@@ -1,0 +1,179 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Power BI MCP Bridge",
+    "description": "Copilot Studio에서 Power BI Desktop 모델에 접근하는 MCP Bridge",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Dream I System",
+      "url": "https://github.com/your-org/copilot-powerbi-desktop-mcp-bridge"
+    }
+  },
+  "host": "localhost:5050",
+  "basePath": "/",
+  "schemes": ["http"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "paths": {
+    "/mcp": {
+      "post": {
+        "operationId": "McpRequest",
+        "summary": "MCP JSON-RPC 요청 전달",
+        "description": "MCP 서버에 JSON-RPC 2.0 요청을 전달하고 응답을 반환합니다. tools/list로 사용 가능한 도구 목록을 조회하거나, tools/call로 특정 도구를 실행할 수 있습니다.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "jsonrpc": {
+                  "type": "string",
+                  "default": "2.0",
+                  "description": "JSON-RPC 프로토콜 버전 (항상 '2.0')"
+                },
+                "id": {
+                  "type": "string",
+                  "description": "요청 식별자 (응답에서 동일한 값 반환)"
+                },
+                "method": {
+                  "type": "string",
+                  "description": "MCP 메서드 이름",
+                  "enum": ["tools/list", "tools/call"],
+                  "x-ms-summary": "메서드"
+                },
+                "params": {
+                  "type": "object",
+                  "description": "메서드별 파라미터 (tools/call의 경우 name과 arguments 필요)",
+                  "x-ms-summary": "파라미터"
+                }
+              },
+              "required": ["jsonrpc", "id", "method"]
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "type": "string",
+            "description": "API Key (Bridge 설정에서 활성화한 경우)",
+            "x-ms-summary": "API Key"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "MCP 응답 (성공 또는 에러)",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "jsonrpc": {
+                  "type": "string",
+                  "description": "JSON-RPC 버전"
+                },
+                "id": {
+                  "type": "string",
+                  "description": "요청 식별자"
+                },
+                "result": {
+                  "type": "object",
+                  "description": "성공 시 결과 데이터"
+                },
+                "error": {
+                  "type": "object",
+                  "description": "에러 발생 시 에러 정보",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "에러 코드"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "에러 메시지"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "잘못된 요청 (JSON-RPC 형식 오류)"
+          },
+          "401": {
+            "description": "인증 실패 (API Key 불일치)"
+          },
+          "500": {
+            "description": "Bridge 내부 오류"
+          },
+          "503": {
+            "description": "MCP 서버 미연결"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "HealthCheck",
+        "summary": "Bridge 상태 확인",
+        "description": "Bridge 서버와 MCP 연결 상태를 확인합니다",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "상태 정보",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "description": "Bridge 상태 (ok, error)"
+                },
+                "bridge": {
+                  "type": "object",
+                  "description": "Bridge 정보",
+                  "properties": {
+                    "version": {
+                      "type": "string",
+                      "description": "Bridge 버전"
+                    },
+                    "uptime": {
+                      "type": "number",
+                      "description": "가동 시간 (초)"
+                    }
+                  }
+                },
+                "mcp": {
+                  "type": "object",
+                  "description": "MCP 서버 연결 상태",
+                  "properties": {
+                    "connected": {
+                      "type": "boolean",
+                      "description": "연결 여부"
+                    },
+                    "exe": {
+                      "type": "string",
+                      "description": "MCP 실행 파일 경로"
+                    },
+                    "pid": {
+                      "type": "integer",
+                      "description": "프로세스 ID"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {},
+  "securityDefinitions": {
+    "API Key": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "X-API-Key"
+    }
+  },
+  "security": [],
+  "tags": []
+}
