@@ -4,7 +4,7 @@ import { loadConfig } from "./config";
 import { initLogger, getLogger } from "./logger";
 import { McpClient } from "./mcp-client";
 import { createServer } from "./server";
-import { discoverMcpExecutable } from "./mcp-discovery";
+import { discoverMcpExecutable, downloadMcpExecutable } from "./mcp-discovery";
 import { runInteractiveSetup } from "./interactive-setup";
 
 /**
@@ -77,9 +77,17 @@ async function resolveCommand(configCommand: string): Promise<string> {
     logger.info("MCP exe를 찾지 못했습니다. 인터랙티브 설정을 시작합니다.");
     const userPath = await runInteractiveSetup();
     if (userPath) return userPath;
+  } else {
+    // 3. non-TTY 환경 (서비스, 백그라운드 등) → 자동 다운로드 시도
+    logger.info("MCP exe를 찾지 못했습니다. 자동 다운로드를 시도합니다...");
+    const downloadedPath = await downloadMcpExecutable();
+    if (downloadedPath) {
+      logger.info(`MCP exe 다운로드 완료: ${downloadedPath}`);
+      return downloadedPath;
+    }
   }
   
-  // 3. 실패
+  // 4. 모든 방법 실패
   printFriendlyError(configCommand);
   process.exit(1);
 }
@@ -97,17 +105,21 @@ function printFriendlyError(command: string): void {
   console.error('');
   console.error('  해결 방법:');
   console.error('');
-  console.error('  1️⃣  config.yaml 파일에서 경로를 직접 지정:');
-  console.error('     mcp:');
-  console.error('       command: "C:\\경로\\powerbi-modeling-mcp.exe"');
+  console.error('  1️⃣  VS Code에서 Extension 설치 (권장):');
+  console.error('     - VS Code 열기 → Extensions → "Power BI Modeling MCP" 검색 → 설치');
+  console.error('     - Bridge를 다시 실행하면 자동으로 찾습니다.');
   console.error('');
-  console.error('  2️⃣  환경변수로 지정:');
+  console.error('  2️⃣  config.yaml에서 경로 직접 지정:');
+  console.error('     mcp:');
+  console.error('       command: "C:\\Users\\사용자\\.vscode\\extensions\\analysis-services.powerbi-modeling-mcp-xxx\\server\\powerbi-modeling-mcp.exe"');
+  console.error('');
+  console.error('  3️⃣  환경변수로 지정:');
   console.error('     set MCP_COMMAND=C:\\경로\\powerbi-modeling-mcp.exe');
   console.error('');
-  console.error('  3️⃣  exe 파일을 Bridge와 같은 폴더에 복사');
+  console.error('  4️⃣  Bridge와 같은 폴더에 exe 파일을 복사');
   console.error('');
-  console.error('  4️⃣  CLI 인수로 지정:');
-  console.error('     pbi-mcp-bridge.exe --mcp-command "C:\\경로\\powerbi-modeling-mcp.exe"');
+  console.error('  5️⃣  GitHub에서 직접 다운로드:');
+  console.error('     https://github.com/nicobailon/powerbi-modeling-mcp');
   console.error('');
 }
 

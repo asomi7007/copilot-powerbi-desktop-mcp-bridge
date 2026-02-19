@@ -6,3 +6,4 @@ logs/
 .env
 config.yaml
 *.exe
+mcp-server/
