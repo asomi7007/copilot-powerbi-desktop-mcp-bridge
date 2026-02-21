@@ -27,7 +27,7 @@ const DEFAULT_CONFIG: BridgeConfig = {
     corsOrigins: ["*"],
   },
   logging: {
-    level: "info",
+    level: "debug",
     file: undefined,
   },
 };

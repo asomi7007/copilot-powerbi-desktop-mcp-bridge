@@ -181,7 +181,9 @@ export class McpClient {
       throw new Error("MCP process is not running");
     }
 
+    const requestJson = JSON.stringify(request);
     logger.debug(`Sending MCP request: ${request.method} (id: ${request.id})`);
+    logger.debug(`MCP request payload: ${requestJson}`);
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -191,14 +193,24 @@ export class McpClient {
       }, this.requestTimeoutMs);
 
       this.pendingRequests.set(request.id, {
-        resolve,
+        resolve: (response: JsonRpcResponse) => {
+          if (response.error) {
+            logger.error(
+              `MCP response error for ${request.method} (id: ${request.id}): ` +
+              `code=${response.error.code}, message=${response.error.message}` +
+              (response.error.data ? `, data=${JSON.stringify(response.error.data)}` : "")
+            );
+          } else {
+            logger.debug(`MCP response success for ${request.method} (id: ${request.id})`);
+          }
+          resolve(response);
+        },
         reject,
         timeout,
       });
 
       try {
-        const requestJson = JSON.stringify(request) + "\n";
-        this.process!.stdin!.write(requestJson, "utf8", (error) => {
+        this.process!.stdin!.write(requestJson + "\n", "utf8", (error) => {
           if (error) {
             clearTimeout(timeout);
             this.pendingRequests.delete(request.id);

@@ -6,6 +6,7 @@ import { createAuthMiddleware } from "./middleware/auth";
 import { requestLogger } from "./middleware/request-logger";
 import { errorHandler } from "./middleware/error-handler";
 import { createMcpRouter } from "./routes/mcp";
+import { createMcpRestRouter } from "./routes/mcp-rest";
 import { createHealthRouter } from "./routes/health";
 
 /**
@@ -31,6 +32,7 @@ export function createServer(config: BridgeConfig, mcpClient: McpClient): Expres
   app.use(createAuthMiddleware(config.security.apiKey));
 
   // 라우트 등록
+  app.use("/mcp", createMcpRestRouter(mcpClient));
   app.use("/mcp", createMcpRouter(mcpClient));
   app.use("/health", createHealthRouter(mcpClient));
 
@@ -41,6 +43,7 @@ export function createServer(config: BridgeConfig, mcpClient: McpClient): Expres
       version: "1.0.0",
       endpoints: {
         mcp: "POST /mcp - Send JSON-RPC requests to MCP process",
+        mcpTools: "POST /mcp/tools/list, POST /mcp/tools/call - REST API for MCP tools",
         health: "GET /health - Check bridge and MCP process status",
       },
     });

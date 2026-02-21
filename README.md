@@ -15,6 +15,8 @@ Power BI Desktop의 데이터 모델을 Microsoft Copilot Studio에서 활용할
 - [빠른 시작 (5분)](#-빠른-시작-5분)
 - [상세 설치 가이드](#-상세-설치-가이드)
 - [설정](#️-설정)
+- [API 레퍼런스](#-api-레퍼런스)
+- [MCP 도구 목록](#-mcp-도구-목록)
 - [Power Platform 연결 설정](#-power-platform-연결-설정)
 - [사용법](#-사용법)
 - [문제 해결](#-문제-해결)
@@ -36,10 +38,14 @@ Power BI Desktop의 데이터 모델을 Microsoft Copilot Studio에서 활용할
 ### 주요 기능
 
 - 🔌 **MCP 프로토콜 지원**: Model Context Protocol을 통한 표준화된 통신
-- 🌐 **HTTP REST API**: Copilot Studio Custom Connector와 호환
+- 🌐 **HTTP REST API**: Copilot Studio Custom Connector와 호환되는 REST 엔드포인트
 - 🔒 **보안 설계**: localhost 바인딩, 선택적 API Key 인증
 - 🚀 **간편한 설치**: 실행 파일 하나로 즉시 실행 가능
-- 📊 **Power BI 데이터 접근**: 테이블, 컬럼, DAX 쿼리 실행 등
+- 📊 **Power BI 데이터 접근**: 테이블, 컬럼, DAX 쿼리 실행, 관계 조회 등
+- 🔍 **MCP 자동 탐색**: VS Code Extension 폴더 등에서 MCP 실행파일 자동 검색
+- 📥 **MCP 자동 다운로드**: VS Code Marketplace에서 MCP 서버 자동 다운로드
+- 🔗 **Power BI 자동 연결**: 로컬 Power BI Desktop 인스턴스 자동 감지 및 연결
+- 🔧 **인터랙티브 설정**: 설정 마법사를 통한 간편한 초기 구성
 
 ### 사용 사례
 
@@ -66,11 +72,16 @@ Power BI Desktop의 데이터 모델을 Microsoft Copilot Studio에서 활용할
 ┌─────────────────────┐
 │  HTTP Bridge        │  ← 이 프로젝트 (localhost:5050)
 │  (Node.js)          │
+│  ┌───────────────┐  │
+│  │ REST API      │  │  ← /mcp/tools/list, /mcp/tools/call
+│  │ JSON-RPC API  │  │  ← POST /mcp
+│  │ Auto-Connect  │  │  ← Power BI 자동 연결
+│  └───────────────┘  │
 └──────────┬──────────┘
            │ stdio (MCP)
            ▼
 ┌─────────────────────┐
-│ powerbi-modeling    │  ← MCP 서버
+│ powerbi-modeling    │  ← MCP 서버 (자동 탐색/다운로드)
 │ -mcp.exe            │
 └──────────┬──────────┘
            │ COM/API
@@ -84,7 +95,7 @@ Power BI Desktop의 데이터 모델을 Microsoft Copilot Studio에서 활용할
 
 1. **Copilot Studio** → Gateway에 요청 (HTTPS)
 2. **Gateway** → Bridge에 전달 (HTTP, 로컬 네트워크)
-3. **Bridge** → MCP 프로세스와 stdio 통신
+3. **Bridge** → MCP 프로세스와 stdio 통신 (자동 연결 포함)
 4. **MCP** → Power BI Desktop과 상호작용 (COM)
 5. 응답은 역순으로 전달
 
@@ -97,7 +108,6 @@ Power BI Desktop의 데이터 모델을 Microsoft Copilot Studio에서 활용할
 1. **사전 요구사항 확인**
    - Windows 10/11
    - Power BI Desktop 설치 및 실행 ([다운로드](https://powerbi.microsoft.com/desktop/))
-   - `powerbi-modeling-mcp.exe` 다운로드 (TODO: 링크 추가)
 
 2. **Bridge 다운로드**
    - [Releases 페이지](../../releases)에서 최신 `pbi-mcp-bridge-win-x64-vX.X.X.zip` 다운로드
@@ -109,6 +119,7 @@ Power BI Desktop의 데이터 모델을 Microsoft Copilot Studio에서 활용할
    cd C:\pbi-mcp-bridge
    .\scripts\start.ps1
    ```
+   > 💡 `powerbi-modeling-mcp.exe`가 없으면 자동으로 VS Code Extension 폴더를 탐색하거나, 인터랙티브 설정 마법사가 실행됩니다.
 
 4. **확인**
    - 브라우저에서 http://localhost:5050/health 접속
@@ -144,7 +155,8 @@ npm start
 |-----------|------|------|----------|
 | **Windows** | 10/11 | 운영체제 | - |
 | **Power BI Desktop** | 최신 | 데이터 모델 제공 | [링크](https://powerbi.microsoft.com/desktop/) |
-| **powerbi-modeling-mcp.exe** | - | MCP 서버 | TODO: 링크 추가 |
+
+> 💡 `powerbi-modeling-mcp.exe`는 Bridge가 자동으로 탐색하거나 다운로드합니다. 별도 설치가 필요하지 않습니다.
 
 #### 선택 사항
 
@@ -154,48 +166,57 @@ npm start
 | **Git** | 소스 clone 시 | [링크](https://git-scm.com/) |
 | **On-premises Data Gateway** | Copilot 연결 시 | [링크](https://powerbi.microsoft.com/gateway/) |
 
+### MCP 실행파일 자동 탐색
+
+Bridge는 시작 시 `powerbi-modeling-mcp.exe`를 다음 순서로 자동 탐색합니다:
+
+1. `config.yaml`에 지정된 절대 경로
+2. VS Code Extensions 폴더 (`%USERPROFILE%\.vscode\extensions\analysis-services.powerbi-modeling-mcp-*`)
+3. VS Code Insiders Extensions 폴더
+4. Bridge와 같은 폴더 / 현재 작업 디렉토리
+5. `%LOCALAPPDATA%`, `%PROGRAMFILES%` 등 일반 설치 경로
+6. PATH 환경변수
+
+찾지 못한 경우:
+- **TTY 환경**: 인터랙티브 설정 마법사 실행 (자동 다운로드 / 경로 입력 / VS Code 안내)
+- **Non-TTY 환경**: VS Code Marketplace에서 자동 다운로드 시도
+
 ### 설치 단계
 
-#### 1단계: powerbi-modeling-mcp.exe 준비
-
-1. `powerbi-modeling-mcp.exe` 다운로드 (TODO: 링크)
-2. Bridge와 같은 폴더에 배치하거나 경로를 [`config.yaml`](config.yaml)에 지정
-
-```yaml
-mcp:
-  command: "C:\\path\\to\\powerbi-modeling-mcp.exe"
-```
-
-#### 2단계: Bridge 설치
+#### 1단계: Bridge 설치
 
 **옵션 A: 실행 파일 (권장)**
 
 1. [Releases](../../releases)에서 zip 다운로드
 2. 원하는 위치에 압축 해제 (예: `C:\pbi-mcp-bridge\`)
-3. 설정 파일 준비:
+3. 설정 파일 준비 (선택):
    ```powershell
    copy config.example.yaml config.yaml
    ```
 
-**옵션 B: npm 설치**
+**옵션 B: 소스 설치**
 
 ```bash
-npm install -g copilot-powerbi-desktop-mcp-bridge
-# 또는 로컬 설치 후
-npm start
+git clone https://github.com/your-org/copilot-powerbi-desktop-mcp-bridge.git
+cd copilot-powerbi-desktop-mcp-bridge
+npm install
+npm run build
 ```
 
-#### 3단계: 서비스 시작
+#### 2단계: 서비스 시작
 
 ```powershell
 # 수동 실행
 .\scripts\start.ps1
 
+# 인터랙티브 설정 마법사 실행
+node dist/index.js --setup
+
 # 또는 Windows 시작 시 자동 실행 (관리자 권한 필요)
 .\scripts\register-startup.ps1
 ```
 
-#### 4단계: 동작 확인
+#### 3단계: 동작 확인
 
 ```powershell
 # 상태 확인
@@ -213,12 +234,17 @@ curl http://localhost:5050/health
     "uptime": 120
   },
   "mcp": {
-    "connected": true,
-    "exe": "powerbi-modeling-mcp.exe",
-    "pid": 12345
+    "state": "running",
+    "pid": 12345,
+    "command": "C:\\Users\\...\\powerbi-modeling-mcp.exe"
+  },
+  "powerbi": {
+    "connected": true
   }
 }
 ```
+
+> ℹ️ `status`는 `"ok"` (정상, 200), `"degraded"` (MCP 미실행, 503), `"error"` (오류, 500) 중 하나입니다.
 
 ---
 
@@ -236,7 +262,7 @@ server:
 
 # MCP 서버 설정
 mcp:
-  command: "powerbi-modeling-mcp.exe"  # MCP 실행 파일 경로
+  command: "powerbi-modeling-mcp.exe"  # MCP 실행 파일 경로 (자동 탐색 가능)
   args: []                              # 추가 명령줄 인수
   # cwd: "C:\\path\\to\\mcp"           # 작업 디렉토리 (선택)
   startupTimeoutMs: 10000               # 시작 타임아웃 (밀리초)
@@ -256,20 +282,42 @@ logging:
 
 ### 환경변수 (.env)
 
-간단한 설정은 환경변수로도 가능합니다. [`config.yaml`](config.yaml)보다 우선순위가 높습니다.
+간단한 설정은 환경변수로도 가능합니다. `config.yaml`보다 우선순위가 높습니다.
 
 ```env
-PORT=5050
-HOST=127.0.0.1
+# Bridge 서버 설정
+BRIDGE_PORT=5050
+BRIDGE_HOST=127.0.0.1
+
+# MCP 설정
 MCP_COMMAND=powerbi-modeling-mcp.exe
-API_KEY=your-secret-key-here
+# MCP_CWD=C:\path\to\mcp
+
+# 보안
+# API_KEY=your-secret-key-here
+
+# 로깅
 LOG_LEVEL=info
+# LOG_FILE=logs/bridge.log
 ```
+
+### CLI 인수
+
+| 인수 | 설명 | 예시 |
+|------|------|------|
+| `--setup`, `--reconfigure` | 인터랙티브 설정 마법사 실행 | `node dist/index.js --setup` |
+| `--reset-config` | config.yaml을 기본값으로 초기화 | `node dist/index.js --reset-config` |
+| `--port <number>` | 서버 포트 지정 | `--port 8080` |
+| `--host <string>` | 바인딩 주소 지정 | `--host 0.0.0.0` |
+| `--mcp-command <path>` | MCP 실행파일 경로 | `--mcp-command "C:\mcp\mcp.exe"` |
+| `--mcp-cwd <path>` | MCP 작업 디렉토리 | `--mcp-cwd "C:\mcp"` |
+| `--api-key <string>` | API Key 설정 | `--api-key "my-key"` |
+| `--log-level <level>` | 로그 레벨 | `--log-level debug` |
 
 ### 설정 우선순위
 
 ```
-명령줄 인수 > 환경변수 (.env) > config.yaml > 기본값
+CLI 인수 > 환경변수 (.env) > config.yaml > 기본값
 ```
 
 ### 주요 설정 항목 설명
@@ -278,10 +326,212 @@ LOG_LEVEL=info
 |------|--------|------|
 | `server.port` | `5050` | HTTP 서버 포트 |
 | `server.host` | `127.0.0.1` | 바인딩 주소 (외부 접근 차단) |
-| `mcp.command` | `powerbi-modeling-mcp.exe` | MCP 실행 파일 |
+| `mcp.command` | `powerbi-modeling-mcp.exe` | MCP 실행 파일 (자동 탐색) |
+| `mcp.cwd` | (Bridge 위치) | MCP 작업 디렉토리 |
+| `mcp.startupTimeoutMs` | `10000` | MCP 프로세스 시작 대기 시간 (10초) |
 | `mcp.requestTimeoutMs` | `30000` | MCP 응답 대기 시간 (30초) |
 | `security.apiKey` | (비활성화) | API Key 인증 활성화 |
-| `logging.level` | `info` | 로그 레벨 |
+| `security.corsOrigins` | `["*"]` | CORS 허용 도메인 |
+| `logging.level` | `debug` | 로그 레벨 (코드 기본값) |
+| `logging.file` | (비활성화) | 로그 파일 경로 |
+
+---
+
+## 📡 API 레퍼런스
+
+### 엔드포인트 요약
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/` | Bridge 정보 및 엔드포인트 목록 |
+| `GET` | `/health` | Bridge 및 MCP 상태 확인 |
+| `POST` | `/mcp/tools/list` | MCP 도구 목록 조회 (REST) |
+| `POST` | `/mcp/tools/call` | MCP 도구 실행 (REST, 자동 연결) |
+| `POST` | `/mcp` | JSON-RPC 2.0 요청 전달 (범용) |
+
+### GET / — Bridge 정보
+
+```bash
+curl http://localhost:5050/
+```
+
+**응답:**
+```json
+{
+  "name": "Copilot + Power BI Desktop MCP Bridge",
+  "version": "1.0.0",
+  "endpoints": {
+    "mcp": "POST /mcp - Send JSON-RPC requests to MCP process",
+    "mcpTools": "POST /mcp/tools/list, POST /mcp/tools/call - REST API for MCP tools",
+    "health": "GET /health - Check bridge and MCP process status"
+  }
+}
+```
+
+### GET /health — 상태 확인
+
+```bash
+curl http://localhost:5050/health
+```
+
+**응답:**
+```json
+{
+  "status": "ok",
+  "bridge": {
+    "version": "1.0.0",
+    "uptime": 3600
+  },
+  "mcp": {
+    "state": "running",
+    "pid": 12345,
+    "command": "powerbi-modeling-mcp.exe"
+  },
+  "powerbi": {
+    "connected": true
+  }
+}
+```
+
+| status | HTTP 코드 | 의미 |
+|--------|----------|------|
+| `ok` | 200 | 정상 |
+| `degraded` | 503 | MCP 미실행 |
+| `error` | 500 | 오류 |
+
+### POST /mcp/tools/list — 도구 목록 (REST)
+
+Copilot Studio Custom Connector에서 사용하는 REST 엔드포인트입니다.
+
+```bash
+curl -X POST http://localhost:5050/mcp/tools/list
+```
+
+**응답:**
+```json
+{
+  "tools": [
+    {
+      "name": "table_operations",
+      "description": "Perform operations on semantic model tables...",
+      "inputSchema": { "..." : "..." }
+    },
+    {
+      "name": "dax_query_operations",
+      "description": "Execute DAX queries...",
+      "inputSchema": { "..." : "..." }
+    }
+  ]
+}
+```
+
+### POST /mcp/tools/call — 도구 실행 (REST, 자동 연결)
+
+Copilot Studio Custom Connector에서 사용하는 핵심 엔드포인트입니다.
+
+> 💡 **자동 연결**: Power BI Desktop이 실행 중이면 로컬 인스턴스를 자동 감지하고 연결합니다. 별도의 `connection_operations` 호출이 필요 없습니다.
+
+**요청 형식:**
+```json
+{
+  "toolName": "도구이름",
+  "toolArguments": "JSON 문자열 또는 객체"
+}
+```
+
+**예시 1: 테이블 목록 조회**
+```bash
+curl -X POST http://localhost:5050/mcp/tools/call ^
+  -H "Content-Type: application/json" ^
+  -d "{\"toolName\":\"table_operations\",\"toolArguments\":\"{\\\"request\\\":{\\\"operation\\\":\\\"List\\\"}}\"}"
+```
+
+**예시 2: DAX 쿼리 실행**
+```bash
+curl -X POST http://localhost:5050/mcp/tools/call ^
+  -H "Content-Type: application/json" ^
+  -d "{\"toolName\":\"dax_query_operations\",\"toolArguments\":\"{\\\"request\\\":{\\\"operation\\\":\\\"Execute\\\",\\\"query\\\":\\\"EVALUATE ROW(\\\\\\\"Total Sales\\\\\\\", SUM(Sales[Amount]))\\\"}}\"}"
+```
+
+**예시 3: toolArguments 생략 (기본값 사용)**
+```bash
+curl -X POST http://localhost:5050/mcp/tools/call ^
+  -H "Content-Type: application/json" ^
+  -d "{\"toolName\":\"table_operations\"}"
+```
+
+> toolArguments를 생략하면 도구별 기본값이 적용됩니다 (예: `table_operations` → `{ request: { operation: "List" } }`).
+
+**toolArguments 지원 형식:**
+- JSON 문자열: `'{"request":{"operation":"List"}}'`
+- 이중 인코딩된 JSON: `'"{\\"request\\":{\\"operation\\":\\"List\\"}}"'`
+- 객체: `{ "request": { "operation": "List" } }`
+- null/undefined/빈 문자열: 도구별 기본값 사용
+
+### POST /mcp — JSON-RPC 전달 (범용)
+
+MCP JSON-RPC 2.0 메시지를 그대로 전달합니다.
+
+```bash
+curl -X POST http://localhost:5050/mcp ^
+  -H "Content-Type: application/json" ^
+  -d "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"tools/list\",\"params\":{}}"
+```
+
+**응답:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "result": {
+    "tools": [ ]
+  }
+}
+```
+
+---
+
+## 🛠️ MCP 도구 목록
+
+Bridge를 통해 사용할 수 있는 MCP 도구들입니다. 모든 도구는 중첩된 `request` 객체 구조를 사용합니다.
+
+| 도구 이름 | 주요 operation | 설명 |
+|-----------|---------------|------|
+| `table_operations` | List, Get, Create, Update, Delete | 테이블 CRUD |
+| `dax_query_operations` | Execute | DAX 쿼리 실행 |
+| `column_operations` | List, Get, Create, Update, Delete | 컬럼 CRUD |
+| `measure_operations` | List, Get, Create, Update, Delete | 측정값 CRUD |
+| `relationship_operations` | List, Get, Create, Delete | 관계 CRUD |
+| `batch_table_operations` | BatchCreate, BatchUpdate, ... | 배치 테이블 작업 |
+| `batch_column_operations` | BatchCreate, BatchUpdate, ... | 배치 컬럼 작업 |
+| `connection_operations` | Status, Connect, ListLocalInstances | 연결 관리 |
+
+### 도구 사용 예시
+
+**테이블 목록:**
+```json
+{ "toolName": "table_operations", "toolArguments": "{\"request\":{\"operation\":\"List\"}}" }
+```
+
+**DAX 쿼리 실행:**
+```json
+{ "toolName": "dax_query_operations", "toolArguments": "{\"request\":{\"operation\":\"Execute\",\"query\":\"EVALUATE INFO.TABLES()\"}}" }
+```
+
+**특정 테이블의 컬럼 조회:**
+```json
+{ "toolName": "column_operations", "toolArguments": "{\"request\":{\"operation\":\"List\",\"tableName\":\"Sales\"}}" }
+```
+
+**측정값 목록:**
+```json
+{ "toolName": "measure_operations", "toolArguments": "{\"request\":{\"operation\":\"List\",\"tableName\":\"Sales\"}}" }
+```
+
+**연결 상태 확인:**
+```json
+{ "toolName": "connection_operations", "toolArguments": "{\"request\":{\"operation\":\"Status\"}}" }
+```
 
 ---
 
@@ -314,7 +564,7 @@ Copilot Studio에서 Bridge를 사용하려면 다음 단계를 따르세요.
    - **+ 새 사용자 지정 커넥터** → **OpenAPI 파일에서 가져오기**
 
 3. **Swagger 파일 업로드**
-   - 이 프로젝트의 [`connector/apiDefinition.swagger.json`](connector/apiDefinition.swagger.json) 파일 업로드
+   - 이 프로젝트의 `connector/apiDefinition.swagger.json` 파일 업로드
    - 커넥터 이름: "Power BI MCP Bridge"
 
 4. **호스트 설정**
@@ -352,14 +602,12 @@ Copilot Studio에서 Bridge를 사용하려면 다음 단계를 따르세요.
    - "Power BI MCP Bridge" 커넥터 추가
 
 3. **작업 구성**
-   - `McpRequest` 작업을 사용하여 MCP 요청 전송
-   - 예시 파라미터:
+   - `ListTools` 작업으로 사용 가능한 도구 확인
+   - `CallTool` 작업으로 도구 실행:
      ```json
      {
-       "jsonrpc": "2.0",
-       "id": "1",
-       "method": "tools/list",
-       "params": {}
+       "toolName": "table_operations",
+       "toolArguments": "{\"request\":{\"operation\":\"List\"}}"
      }
      ```
 
@@ -372,7 +620,7 @@ Copilot Studio에서 Bridge를 사용하려면 다음 단계를 따르세요.
 
 ## 📖 사용법
 
-### API 직접 호출
+### REST API로 직접 호출 (권장)
 
 #### 1. 상태 확인
 
@@ -380,78 +628,26 @@ Copilot Studio에서 Bridge를 사용하려면 다음 단계를 따르세요.
 curl http://localhost:5050/health
 ```
 
-**응답:**
-```json
-{
-  "status": "ok",
-  "bridge": {
-    "version": "1.0.0",
-    "uptime": 3600
-  },
-  "mcp": {
-    "connected": true,
-    "exe": "powerbi-modeling-mcp.exe",
-    "pid": 12345
-  }
-}
-```
-
 #### 2. 사용 가능한 도구 목록 조회
 
 ```bash
-curl -X POST http://localhost:5050/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": "1",
-    "method": "tools/list",
-    "params": {}
-  }'
-```
-
-**응답 예시:**
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "1",
-  "result": {
-    "tools": [
-      {
-        "name": "execute_dax",
-        "description": "Execute a DAX query against the Power BI model",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "query": { "type": "string" }
-          },
-          "required": ["query"]
-        }
-      },
-      {
-        "name": "list_tables",
-        "description": "List all tables in the model"
-      }
-    ]
-  }
-}
+curl -X POST http://localhost:5050/mcp/tools/list
 ```
 
 #### 3. 도구 실행 (DAX 쿼리 예시)
 
 ```bash
-curl -X POST http://localhost:5050/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": "2",
-    "method": "tools/call",
-    "params": {
-      "name": "execute_dax",
-      "arguments": {
-        "query": "EVALUATE ROW(\"Total Sales\", SUM(Sales[Amount]))"
-      }
-    }
-  }'
+curl -X POST http://localhost:5050/mcp/tools/call ^
+  -H "Content-Type: application/json" ^
+  -d "{\"toolName\":\"dax_query_operations\",\"toolArguments\":\"{\\\"request\\\":{\\\"operation\\\":\\\"Execute\\\",\\\"query\\\":\\\"EVALUATE ROW(\\\\\\\"Total Sales\\\\\\\", SUM(Sales[Amount]))\\\"}}\"}"
+```
+
+### JSON-RPC로 직접 호출
+
+```bash
+curl -X POST http://localhost:5050/mcp ^
+  -H "Content-Type: application/json" ^
+  -d "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"tools/call\",\"params\":{\"name\":\"table_operations\",\"arguments\":{\"request\":{\"operation\":\"List\"}}}}"
 ```
 
 ### Copilot Studio에서 사용
@@ -459,18 +655,18 @@ curl -X POST http://localhost:5050/mcp \
 Copilot Studio의 Topics에서 Custom Connector 작업을 사용합니다:
 
 1. **트리거 설정**: 사용자 질문 인식
-2. **작업 실행**: `McpRequest` 호출
+2. **작업 실행**: `CallTool` 호출 (toolName + toolArguments)
 3. **응답 처리**: 결과를 자연어로 변환하여 답변
 
 **예시 플로우:**
 ```
 사용자: "매출 테이블에 어떤 컬럼이 있어?"
   ↓
-Copilot: tools/call("describe_table", {"table": "Sales"})
+Copilot: CallTool("column_operations", '{"request":{"operation":"List","tableName":"Sales"}}')
   ↓
-Bridge → MCP → Power BI Desktop
+Bridge → 자동 연결 → MCP → Power BI Desktop
   ↓
-응답: { "columns": ["Date", "Amount", "Customer", ...] }
+응답: { "content": [{ "type": "text", "text": "..." }] }
   ↓
 Copilot: "매출 테이블에는 Date, Amount, Customer 등의 컬럼이 있습니다."
 ```
@@ -484,31 +680,33 @@ Copilot: "매출 테이블에는 Date, Amount, Customer 등의 컬럼이 있습�
 **증상:**
 ```json
 {
-  "status": "error",
-  "mcp": {
-    "connected": false
-  }
+  "status": "degraded",
+  "mcp": { "state": "stopped" }
 }
 ```
 
 **해결 방법:**
 
-1. **MCP 파일 경로 확인**
+1. **자동 탐색 확인** — Bridge가 MCP exe를 자동으로 찾지 못한 경우:
    ```powershell
-   # config.yaml에서 경로 확인
-   Get-Content config.yaml | Select-String "command"
-   
-   # 파일 존재 확인
-   Test-Path "powerbi-modeling-mcp.exe"
+   # 설정 마법사 실행
+   node dist/index.js --setup
    ```
 
-2. **수동 실행 테스트**
+2. **VS Code Extension 확인**
    ```powershell
-   .\powerbi-modeling-mcp.exe
-   # 에러 메시지 확인
+   # VS Code에서 설치 확인
+   dir "$env:USERPROFILE\.vscode\extensions\analysis-services.powerbi-modeling-mcp-*"
    ```
 
-3. **로그 확인**
+3. **수동 경로 지정**
+   ```yaml
+   # config.yaml
+   mcp:
+     command: "C:\\Users\\사용자\\.vscode\\extensions\\analysis-services.powerbi-modeling-mcp-xxx\\server\\powerbi-modeling-mcp.exe"
+   ```
+
+4. **로그 확인**
    ```powershell
    # Bridge 로그 확인 (logging.file 설정한 경우)
    Get-Content logs\bridge.log -Tail 50
@@ -531,6 +729,13 @@ Copilot: "매출 테이블에는 Date, Amount, Customer 등의 컬럼이 있습�
 3. **외부 도구 연결 허용 확인**
    - Power BI Desktop 옵션 → 보안 → "외부 도구 연결 허용" 체크
 
+4. **수동 연결 테스트**
+   ```bash
+   curl -X POST http://localhost:5050/mcp/tools/call ^
+     -H "Content-Type: application/json" ^
+     -d "{\"toolName\":\"connection_operations\",\"toolArguments\":\"{\\\"request\\\":{\\\"operation\\\":\\\"ListLocalInstances\\\"}}\"}"
+   ```
+
 ### Gateway 연결 안됨
 
 **증상:** Copilot Studio에서 "Gateway를 사용할 수 없습니다" 오류
@@ -548,7 +753,7 @@ Copilot: "매출 테이블에는 Date, Amount, Customer 등의 컬럼이 있습�
    ```
 
 3. **네트워크 바인딩**
-   - [`config.yaml`](config.yaml)의 `server.host`를 `0.0.0.0`으로 변경하여 모든 네트워크 인터페이스에서 수신
+   - `config.yaml`의 `server.host`를 `0.0.0.0`으로 변경하여 모든 네트워크 인터페이스에서 수신
    - ⚠️ 보안 주의: 방화벽 설정 필수
 
 ### API Key 인증 오류
@@ -582,35 +787,42 @@ Copilot: "매출 테이블에는 Date, Amount, Customer 등의 컬럼이 있습�
 ```
 copilot-powerbi-desktop-mcp-bridge/
 ├── src/
-│   ├── index.ts                 # 엔트리포인트
+│   ├── index.ts                 # 엔트리포인트, CLI 인수 처리
 │   ├── server.ts                # Express 서버 설정
-│   ├── config.ts                # 설정 로더
+│   ├── config.ts                # 설정 로더 (yaml + env + CLI)
 │   ├── logger.ts                # Winston 로거
-│   ├── mcp-client.ts            # MCP 클라이언트
+│   ├── mcp-client.ts            # MCP stdio 클라이언트
+│   ├── mcp-discovery.ts         # MCP 실행파일 자동 탐색/다운로드
+│   ├── interactive-setup.ts     # 인터랙티브 설정 마법사
 │   ├── types.ts                 # TypeScript 타입 정의
 │   ├── middleware/              # Express 미들웨어
 │   │   ├── auth.ts              # API Key 인증
 │   │   ├── request-logger.ts    # 요청 로깅
 │   │   └── error-handler.ts     # 에러 핸들러
 │   └── routes/                  # API 라우트
-│       ├── mcp.ts               # POST /mcp
+│       ├── mcp.ts               # POST /mcp (JSON-RPC)
+│       ├── mcp-rest.ts          # POST /mcp/tools/list, /mcp/tools/call (REST)
 │       └── health.ts            # GET /health
 ├── scripts/                     # PowerShell 스크립트
 │   ├── install.ps1              # 설치 스크립트
 │   ├── start.ps1                # 시작 스크립트
 │   ├── stop.ps1                 # 중지 스크립트
+│   ├── setup.ps1                # 설정 관리 스크립트
 │   └── register-startup.ps1     # 시작프로그램 등록
 ├── connector/                   # Power Platform Custom Connector
-│   ├── apiDefinition.swagger.json
-│   └── apiProperties.json
+│   ├── apiDefinition.swagger.json  # Swagger API 정의
+│   └── apiProperties.json          # 커넥터 속성
 ├── .github/workflows/           # GitHub Actions CI/CD
 │   └── build.yml                # 빌드 및 릴리스
-├── plans/
-│   └── ARCHITECTURE.md          # 아키텍처 설계 문서
+├── plans/                       # 설계 문서
+│   ├── ARCHITECTURE.md          # 아키텍처 설계 문서
+│   └── COPILOT_STUDIO_COMPAT.md # Copilot Studio 호환 문서
+├── tools_list.json              # MCP 도구 목록 참조
 ├── config.example.yaml          # 설정 예시
 ├── .env.example                 # 환경변수 예시
 ├── package.json
 ├── tsconfig.json
+├── LICENSE
 └── README.md                    # 이 문서
 ```
 
@@ -620,11 +832,14 @@ copilot-powerbi-desktop-mcp-bridge/
 # TypeScript 컴파일
 npm run build
 
-# 개발 모드 (watch)
+# 개발 모드 (ts-node)
 npm run dev
 
 # 단일 .exe 빌드 (Windows)
 npm run pkg:build
+
+# 클린 빌드
+npm run clean && npm run build
 ```
 
 ### 로컬 개발
@@ -641,27 +856,15 @@ npm run build
 npm start
 ```
 
-### 환경변수 설정
+### 스크립트 목록
 
-```bash
-# .env 파일 생성
-copy .env.example .env
-
-# 설정 편집
-notepad .env
-```
-
-### 로그 레벨 변경
-
-```yaml
-# config.yaml
-logging:
-  level: "debug"  # 상세 로그
-```
-
-### 새로운 MCP 도구 추가
-
-Bridge는 MCP 프로토콜을 투명하게 전달하므로, MCP 서버(`powerbi-modeling-mcp.exe`)에서 새 도구를 추가하면 자동으로 사용 가능합니다.
+| 스크립트 | 설명 |
+|---------|------|
+| `scripts/install.ps1` | 원클릭 설치 (Node.js 확인, 다운로드, 설정) |
+| `scripts/start.ps1` | Bridge 시작 (Power BI 실행 확인 포함) |
+| `scripts/stop.ps1` | Bridge 및 MCP 프로세스 중지 |
+| `scripts/setup.ps1` | 설정 마법사/초기화/경로 변경/설정 확인 |
+| `scripts/register-startup.ps1` | Windows 시작프로그램 등록/해제 |
 
 ### 코드 스타일
 
@@ -691,22 +894,6 @@ Bridge는 MCP 프로토콜을 투명하게 전달하므로, MCP 서버(`powerbi-
 
 이 프로젝트는 [MIT License](LICENSE) 하에 배포됩니다.
 
-```
-MIT License
-
-Copyright (c) 2025 Dream I System
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-...
-```
-
-전문은 [LICENSE](LICENSE) 파일 참조.
-
 ---
 
 ## 🙏 감사의 글
@@ -714,6 +901,7 @@ furnished to do so, subject to the following conditions:
 이 프로젝트는 다음 오픈소스 프로젝트를 참고하였습니다:
 
 - [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol)
+- [powerbi-modeling-mcp](https://github.com/nicobailon/powerbi-modeling-mcp)
 - Express.js, Winston, TypeScript 커뮤니티
 
 ---
