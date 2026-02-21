@@ -65,6 +65,7 @@ Bridge가 로컬 Power BI Desktop에 자동으로 연결합니다. connection_op
 단건 조회: toolName: "table_operations", toolArguments: {"request": {"operation": "Get", "tableName": "테이블명"}}
 스키마: toolName: "table_operations", toolArguments: {"request": {"operation": "GetSchema", "tableName": "테이블명"}}
 생성: toolName: "table_operations", toolArguments: {"request": {"operation": "Create", "tableName": "이름", "createDefinition": {"name": "이름", "partitions": [{"name": "Partition1", "source": {"type": "calculated", "expression": "ROW(\"Col1\", 1)"}}]}}}
+파워쿼리 테이블 생성: toolName: "table_operations", toolArguments: {"request": {"operation": "Create", "tableName": "이름", "createDefinition": {"name": "이름", "mExpression": "let\n  Source = #table({\"ID\", \"Name\"}, {{1, \"Alice\"}, {2, \"Bob\"}})\nin\n  Source", "columns": [{"name": "ID", "sourceColumn": "ID", "dataType": "int64"}, {"name": "Name", "sourceColumn": "Name", "dataType": "string"}]}}}
 수정: toolName: "table_operations", toolArguments: {"request": {"operation": "Update", "tableName": "이름", "updateDefinition": {"description": "설명"}}}
 삭제: toolName: "table_operations", toolArguments: {"request": {"operation": "Delete", "tableName": "이름", "shouldCascadeDelete": true}}
 
@@ -97,8 +98,8 @@ Bridge가 로컬 Power BI Desktop에 자동으로 연결합니다. connection_op
 
 ### partition_operations — 파티션 관리
 목록: toolName: "partition_operations", toolArguments: {"request": {"operation": "List", "tableName": "테이블명"}}
-생성: toolName: "partition_operations", toolArguments: {"request": {"operation": "Create", "tableName": "테이블명", "createDefinition": {"name": "파티션명", "source": {"type": "m", "expression": "let\n  Source = #table({\"Col\"}, {{1}})\nin\n  Source"}}}}
-수정: toolName: "partition_operations", toolArguments: {"request": {"operation": "Update", "tableName": "테이블명", "updateDefinition": {"tableName": "테이블명", "name": "파티션명", "description": "설명"}}}
+생성: toolName: "partition_operations", toolArguments: {"request": {"operation": "Create", "tableName": "테이블명", "createDefinition": {"name": "파티션명", "sourceType": "M", "expression": "let\n  Source = #table({\"Col1\", \"Col2\"}, {{1, \"A\"}, {2, \"B\"}})\nin\n  Source"}}}
+수정: toolName: "partition_operations", toolArguments: {"request": {"operation": "Update", "tableName": "테이블명", "updateDefinition": {"tableName": "테이블명", "name": "파티션명", "expression": "let\n  Source = 새_M_식\nin\n  Source"}}}
 삭제: toolName: "partition_operations", toolArguments: {"request": {"operation": "Delete", "tableName": "테이블명", "partitionName": "파티션명"}}
 
 ### connection_operations — 연결 관리 (자동 처리됨, 보통 직접 호출 불필요)
@@ -121,6 +122,8 @@ Bridge가 로컬 Power BI Desktop에 자동으로 연결합니다. connection_op
 - 한국어로 응답합니다.
 - connection_operations는 직접 호출하지 않습니다. Bridge가 자동 처리합니다.
 - 파라미터 구조를 모를 때는 해당 도구의 Help operation을 먼저 호출합니다.
+- 파워쿼리(M expression) 파티션 생성 시 sourceType:"M"과 expression을 플랫 형식으로 전달합니다.
+- 파워쿼리 테이블 생성 시 mExpression을 createDefinition 최상위에 놓고, 컬럼에는 sourceColumn을 반드시 포함합니다.
 ```
 
 ---
@@ -144,6 +147,8 @@ Bridge가 로컬 Power BI Desktop에 자동으로 연결합니다. connection_op
 | connection_operations | ListConnections, ListLocalInstances, GetLastUsed | ✅ 성공 | `Status`는 미지원, `ListConnections` 사용 |
 | batch_measure_operations | BatchCreate, BatchDelete | ✅ 성공 | BatchDelete의 items는 문자열 배열 |
 | partition_operations | List, Get, Create, Update, Delete | ✅ 전체 성공 | M expression 필요 |
+| partition_operations (PQ) | Create (M식), Get, Update (M식 변경), Delete | ✅ 전체 성공 | `sourceType:"M"` + `expression` 플랫 형식 필수. `source.type` 중첩 형식 ❌ |
+| table_operations (PQ 테이블) | Create (mExpression) | ✅ 성공 | `mExpression` 최상위 + `columns`(sourceColumn) 필수 |
 
 ### 주요 발견 사항
 1. **CreateDefinition 패턴**: table, column, partition은 `createDefinition` 래핑 필수
@@ -153,3 +158,5 @@ Bridge가 로컬 Power BI Desktop에 자동으로 연결합니다. connection_op
 5. **connection_operations**: `Status` 미지원 → `ListConnections` 사용
 6. **batch_measure BatchDelete**: items는 `["이름1", "이름2"]` 문자열 배열
 7. **모든 도구 Help 지원**: `{"request": {"operation": "Help"}}` 로 파라미터 확인 가능
+8. **파워쿼리 파티션**: `createDefinition`에서 `source.type`/`source.expression` 중첩 형식이 아닌, `sourceType:"M"` + `expression` 플랫 형식 사용 필수
+9. **파워쿼리 테이블 생성**: `partitions[]` 배열이 아닌 `createDefinition.mExpression` 최상위 속성 사용, 컬럼에 `sourceColumn` 필수
