@@ -489,6 +489,9 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
 
       const { toolName, toolArguments } = req.body;
 
+      // ─── Copilot Studio 디버깅: raw toolArguments 상세 로깅 ───
+      logger.info(`[TOOL CALL] toolName='${toolName}', toolArguments type='${typeof toolArguments}', value=${JSON.stringify(toolArguments)?.substring(0, 300) ?? "undefined"}`);
+
       if (!toolName || typeof toolName !== "string") {
         res.status(400).json({
           error: { code: -32602, message: "toolName is required and must be a string" },
@@ -507,9 +510,12 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
       }
       const parsedArguments = parseResult.args;
       
+      // 기본값 폴백 여부 추적 (응답에 경고 포함용)
+      const usedDefaultArgs = toolArguments === null || toolArguments === undefined || toolArguments === "";
+      
       // Copilot Studio 호환성: toolArguments가 없었을 경우 기본값을 사용했음을 기록
-      if (toolArguments === null || toolArguments === undefined || toolArguments === "") {
-        logger.info(`Using default arguments for tool '${toolName}' because toolArguments was not provided by Copilot Studio`);
+      if (usedDefaultArgs) {
+        logger.warn(`⚠️ Using DEFAULT arguments for tool '${toolName}' because toolArguments was ${toolArguments === null ? "null" : toolArguments === undefined ? "undefined" : "empty string"}. Copilot Studio may not be sending toolArguments correctly. Default: ${JSON.stringify(parsedArguments)}`);
       }
 
       // ─── 자동 연결 보장 (connection_operations 자체 호출 시에는 스킵) ───
@@ -581,7 +587,21 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
           detail: `MCP server returned an error for tool '${toolName}'. This usually means the arguments structure is incorrect or missing required parameters.`
         });
       } else {
-        res.json(response.result || {});
+        const result = response.result || {};
+        
+        // 기본값 폴백이 사용된 경우, 응답에 경고 메타데이터를 추가
+        if (usedDefaultArgs) {
+          res.json({
+            ...result as Record<string, unknown>,
+            _bridge_warning: {
+              message: `toolArguments was not provided (was ${toolArguments === null ? "null" : toolArguments === undefined ? "undefined" : "empty string"}). Used default arguments: ${JSON.stringify(parsedArguments)}. If you intended a different operation (e.g., Delete, Create), ensure Copilot Studio sends toolArguments correctly. Check that the latest Swagger (with toolArguments type: "object") is uploaded to Power Platform.`,
+              defaultArgumentsUsed: parsedArguments,
+              receivedToolArguments: toolArguments ?? null,
+            },
+          });
+        } else {
+          res.json(result);
+        }
       }
     } catch (error) {
       if (error instanceof Error && error.message.includes("timeout")) {
