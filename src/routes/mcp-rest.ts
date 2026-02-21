@@ -64,6 +64,11 @@ function parseToolArguments(
   }
 
   if (typeof toolArguments === "object" && !Array.isArray(toolArguments)) {
+    // 빈 객체({})도 기본값으로 폴백 — Copilot Studio가 빈 객체를 보내는 경우
+    if (Object.keys(toolArguments as Record<string, unknown>).length === 0) {
+      logger.debug(`parseToolArguments: empty object received for tool '${toolName}', using defaults`);
+      return { success: true, args: getDefaultArgumentsForTool(toolName) };
+    }
     logger.debug(`parseToolArguments: input is already an object: ${JSON.stringify(toolArguments)}`);
     return { success: true, args: toolArguments as Record<string, unknown> };
   }
@@ -511,7 +516,11 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
       const parsedArguments = parseResult.args;
       
       // 기본값 폴백 여부 추적 (응답에 경고 포함용)
-      const usedDefaultArgs = toolArguments === null || toolArguments === undefined || toolArguments === "";
+      const usedDefaultArgs = toolArguments === null
+        || toolArguments === undefined
+        || toolArguments === ""
+        || (typeof toolArguments === "object" && toolArguments !== null
+            && !Array.isArray(toolArguments) && Object.keys(toolArguments as Record<string, unknown>).length === 0);
       
       // Copilot Studio 호환성: toolArguments가 없었을 경우 기본값을 사용했음을 기록
       if (usedDefaultArgs) {

@@ -73,7 +73,7 @@
             "required": true,
             "schema": {
               "type": "object",
-              "required": ["toolName"],
+              "required": ["toolName", "toolArguments"],
               "properties": {
                 "toolName": {
                   "type": "string",
