@@ -105,6 +105,20 @@ function getDefaultArgumentsForTool(toolName: string): Record<string, unknown> {
     case "relationship_operations":
       return { request: { operation: "List" } };
     
+    case "batch_measure_operations":
+      return {
+        request: {
+          operation: "List"
+        }
+      };
+    
+    case "batch_column_operations":
+      return {
+        request: {
+          operation: "List"
+        }
+      };
+    
     case "batch_table_operations":
       return {
         request: {

@@ -81,9 +81,23 @@
                   "x-ms-summary": "도구 이름"
                 },
                 "toolArguments": {
-                  "type": "string",
-                  "description": "도구 인자 (JSON 문자열 또는 객체). 중첩된 request 구조를 사용합니다. 예시: table_operations → {\"request\":{\"operation\":\"List\"}} | dax_query_operations → {\"request\":{\"operation\":\"Execute\",\"query\":\"EVALUATE ROW(\\\"Result\\\", 1+1)\"}} | column_operations → {\"request\":{\"operation\":\"List\",\"tableName\":\"Sales\"}} | measure_operations → {\"request\":{\"operation\":\"List\",\"tableName\":\"Sales\"}} | connection_operations → {\"request\":{\"operation\":\"Status\"}}",
-                  "x-ms-summary": "도구 인자 (JSON)"
+                  "type": "object",
+                  "description": "도구 인자 (JSON 객체). 중첩된 request 구조를 사용합니다. 예시: table_operations → {\"request\":{\"operation\":\"List\"}} | dax_query_operations → {\"request\":{\"operation\":\"Execute\",\"query\":\"EVALUATE ROW(\\\"Result\\\", 1+1)\"}} | column_operations → {\"request\":{\"operation\":\"List\",\"tableName\":\"Sales\"}} | measure_operations → {\"request\":{\"operation\":\"List\",\"tableName\":\"Sales\"}} | connection_operations → {\"request\":{\"operation\":\"Status\"}}",
+                  "x-ms-summary": "도구 인자",
+                  "properties": {
+                    "request": {
+                      "type": "object",
+                      "description": "요청 객체",
+                      "properties": {
+                        "operation": {
+                          "type": "string",
+                          "description": "수행할 작업 (List, Get, Create, Update, Delete, Execute, BatchCreate, Status, Connect 등)"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
                 }
               }
             }
@@ -144,7 +158,7 @@
               "properties": {
                 "status": {
                   "type": "string",
-                  "description": "Bridge 상태 (ok, error)"
+                  "description": "Bridge 상태 (ok, degraded, error)"
                 },
                 "bridge": {
                   "type": "object",
@@ -162,24 +176,41 @@
                 },
                 "mcp": {
                   "type": "object",
-                  "description": "MCP 서버 연결 상태",
+                  "description": "MCP 서버 상태",
                   "properties": {
-                    "connected": {
-                      "type": "boolean",
-                      "description": "연결 여부"
-                    },
-                    "exe": {
+                    "state": {
                       "type": "string",
-                      "description": "MCP 실행 파일 경로"
+                      "description": "MCP 프로세스 상태 (stopped, starting, running, error)",
+                      "x-ms-summary": "MCP 상태"
                     },
                     "pid": {
                       "type": "integer",
-                      "description": "프로세스 ID"
+                      "description": "프로세스 ID",
+                      "x-ms-summary": "프로세스 ID"
+                    },
+                    "command": {
+                      "type": "string",
+                      "description": "MCP 실행 명령어",
+                      "x-ms-summary": "MCP 명령어"
+                    }
+                  }
+                },
+                "powerbi": {
+                  "type": "object",
+                  "description": "Power BI Desktop 연결 상태",
+                  "properties": {
+                    "connected": {
+                      "type": "boolean",
+                      "description": "Power BI Desktop 연결 여부",
+                      "x-ms-summary": "Power BI 연결"
                     }
                   }
                 }
               }
             }
+          },
+          "503": {
+            "description": "MCP 프로세스 미준비 (degraded 상태)"
           }
         }
       }
