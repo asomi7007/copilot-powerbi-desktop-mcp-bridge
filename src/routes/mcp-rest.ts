@@ -131,8 +131,15 @@ function getDefaultArgumentsForTool(toolName: string): Record<string, unknown> {
         }
       };
     
+    case "partition_operations":
+      return {
+        request: {
+          operation: "List"
+        }
+      };
+    
     case "connection_operations":
-      return { request: { operation: "Status" } };
+      return { request: { operation: "ListConnections" } };
     
     default:
       // 알려지지 않은 도구에 대한 기본값

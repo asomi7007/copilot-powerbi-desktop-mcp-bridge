@@ -1,425 +1,155 @@
-# Copilot Studio 호환성을 위한 API 평탄화 설계
+# Copilot Studio 호환 가이드
 
-## 1. 문제 분석
+## 최종 업데이트: 2026-02-21
 
-### 현재 상황
-- `POST /mcp` 엔드포인트가 JSON-RPC 2.0 형식을 받음
-- Copilot Studio의 Power Fx 커넥터는 **중첩된 JSON 객체를 파라미터로 전달할 수 없음**
+이 문서는 Copilot Studio에서 Power BI MCP Bridge를 사용하기 위한 설정 가이드입니다.
 
-### 실패하는 요청 예시 (tools/call)
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "req-1",
-  "method": "tools/call",
-  "params": {           // ← 중첩 객체: Copilot Studio에서 전달 불가
-    "name": "table_operations",
-    "arguments": {      // ← 이중 중첩: 더더욱 불가
-      "action": "List"
-    }
-  }
-}
+---
+
+## 1. Custom Connector 설정
+
+### Swagger 파일 업로드
+`connector/apiDefinition.swagger.json`을 Power Platform에 업로드합니다.
+
+### 주요 작업 (Operations)
+| operationId | 메서드 | 경로 | 설명 |
+|-------------|--------|------|------|
+| HealthCheck | GET | /health | Bridge 상태 확인 |
+| ListTools | POST | /mcp/tools/list | 도구 목록 조회 |
+| CallTool | POST | /mcp/tools/call | 도구 실행 |
+
+### CallTool 파라미터
+- **toolName** (필수, string): 도구 이름
+- **toolArguments** (필수, object): 도구 인자 — 반드시 `{ "request": { "operation": "...", ... } }` 구조
+
+---
+
+## 2. Copilot Studio 봇 지침 (Instructions)
+
+아래 텍스트를 Copilot Studio → 봇 설정 → Instructions에 복사하세요.
+
 ```
+당신은 Power BI Desktop 데이터 모델 전문가입니다. 사용자가 Power BI 모델에 대해 질문하면 Custom Connector를 통해 실제 데이터를 조회하고 분석합니다.
 
-### 성공하는 요청 예시 (tools/list)
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "req-1",
-  "method": "tools/list",
-  "params": {}          // ← 빈 객체여서 Copilot Studio가 생략 가능
-}
-```
+## 사용 가능한 커넥터 작업 (3개)
 
-### 근본 원인
-Copilot Studio Power Fx 커넥터의 제약사항:
-- 요청 body에 **원시 타입(string, number, boolean)만** 전달 가능
-- 중첩 객체(`params.name`, `params.arguments`)를 구성할 수 없음
-- Swagger 정의에서 `type: "object"`인 필드에 값을 동적으로 채울 수 없음
+### 1. HealthCheck
+Bridge 서버와 MCP 연결 상태를 확인합니다.
+- powerbi.connected로 Power BI Desktop 연결 여부 확인
+- mcp.state로 MCP 프로세스 상태 확인 (running/stopped/error)
+- 문제 발생 시 가장 먼저 호출합니다.
 
-## 2. 옵션 비교
+### 2. ListTools
+사용 가능한 MCP 도구 목록과 파라미터 정보를 조회합니다.
+- 도구의 정확한 파라미터 구조를 모를 때 이 작업으로 확인합니다.
 
-| 기준 | 옵션 A: 기존 엔드포인트 확장 | 옵션 B: 개별 REST 엔드포인트 | 옵션 C: 쿼리 파라미터 방식 |
-|------|---------------------------|---------------------------|-------------------------|
-| 설명 | `/mcp`에 `toolName`, `toolArguments` 평탄 필드 추가 | `/mcp/tools/list`, `/mcp/tools/call` 별도 엔드포인트 | `/mcp?method=tools/call&toolName=...` |
-| Copilot Studio 호환 | ✅ 가능 | ✅ 가능 | ⚠️ body+query 혼합 시 문제 가능 |
-| 기존 호환성 | ⚠️ JSON-RPC 필드와 평탄 필드 혼재 | ✅ 기존 `/mcp` 그대로 유지 | ❌ 기존 방식과 충돌 |
-| Swagger 명확성 | ⚠️ 하나의 스키마에 두 방식 혼재 | ✅ 각 엔드포인트별 명확한 스키마 | ⚠️ 복잡 |
-| 구현 복잡도 | 낮음 | 중간 | 중간 |
-| 유지보수성 | ⚠️ 조건 분기 로직 복잡 | ✅ 각 핸들러가 단일 책임 | ⚠️ 파싱 로직 복잡 |
+### 3. CallTool
+MCP 도구를 실행합니다. 두 가지 파라미터를 사용합니다:
+- toolName (필수): 실행할 도구 이름
+- toolArguments (필수): 도구 인자 (객체)
 
-## 3. 선택: 옵션 B - 개별 REST 엔드포인트
+## toolArguments 구조 규칙
+모든 도구의 toolArguments는 반드시 아래 중첩 구조를 따릅니다:
+{"request": {"operation": "작업명", ...추가파라미터}}
 
-### 선택 이유
-1. **기존 호환성 100% 유지**: 기존 `POST /mcp` 엔드포인트를 전혀 수정하지 않음
-2. **명확한 Swagger 정의**: 각 엔드포인트가 자체적인 평탄 스키마를 가짐
-3. **단일 책임 원칙**: 각 핸들러가 하나의 MCP 메서드만 처리
-4. **Copilot Studio 친화적**: 모든 파라미터가 원시 타입(string)으로 전달 가능
+주의: "action"이 아닌 반드시 "operation"을 사용합니다.
+주의: 한국어 테이블명을 DAX에서 사용할 때는 작은따옴표로 감싸야 합니다. 예: SUM('판매'[수량])
 
-## 4. 상세 설계
+## 자동 연결
+Bridge가 로컬 Power BI Desktop에 자동으로 연결합니다. connection_operations를 직접 호출할 필요가 없습니다.
 
-### 4.1 새 엔드포인트 정의
+## 도구별 호출 예시 (실제 테스트 검증 완료)
 
-#### `POST /mcp/tools/list` - 도구 목록 조회
+### table_operations — 테이블 관리
+목록: toolName: "table_operations", toolArguments: {"request": {"operation": "List"}}
+단건 조회: toolName: "table_operations", toolArguments: {"request": {"operation": "Get", "tableName": "테이블명"}}
+스키마: toolName: "table_operations", toolArguments: {"request": {"operation": "GetSchema", "tableName": "테이블명"}}
+생성: toolName: "table_operations", toolArguments: {"request": {"operation": "Create", "tableName": "이름", "createDefinition": {"name": "이름", "partitions": [{"name": "Partition1", "source": {"type": "calculated", "expression": "ROW(\"Col1\", 1)"}}]}}}
+수정: toolName: "table_operations", toolArguments: {"request": {"operation": "Update", "tableName": "이름", "updateDefinition": {"description": "설명"}}}
+삭제: toolName: "table_operations", toolArguments: {"request": {"operation": "Delete", "tableName": "이름", "shouldCascadeDelete": true}}
 
-**요청 Body** (파라미터 없음 또는 빈 body):
-```json
-{}
-```
+### column_operations — 컬럼 관리
+목록: toolName: "column_operations", toolArguments: {"request": {"operation": "List", "tableName": "테이블명"}}
+생성: toolName: "column_operations", toolArguments: {"request": {"operation": "Create", "tableName": "테이블명", "createDefinition": {"name": "컬럼명", "expression": "[컬럼A]*[컬럼B]", "type": "calculated"}}}
+수정: toolName: "column_operations", toolArguments: {"request": {"operation": "Update", "tableName": "테이블명", "columnName": "컬럼명", "updateDefinition": {"description": "설명"}}}
+삭제: toolName: "column_operations", toolArguments: {"request": {"operation": "Delete", "tableName": "테이블명", "columnName": "컬럼명"}}
 
-**내부 변환**: 서버가 JSON-RPC 요청으로 조립
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "<auto-generated-uuid>",
-  "method": "tools/list",
-  "params": {}
-}
-```
+### measure_operations — 측정값 관리
+목록: toolName: "measure_operations", toolArguments: {"request": {"operation": "List", "tableName": "테이블명"}}
+생성: toolName: "measure_operations", toolArguments: {"request": {"operation": "Create", "tableName": "테이블명", "name": "측정값명", "expression": "SUM('테이블명'[컬럼명])"}}
+조회: toolName: "measure_operations", toolArguments: {"request": {"operation": "Get", "tableName": "테이블명", "measureName": "측정값명"}}
+수정: toolName: "measure_operations", toolArguments: {"request": {"operation": "Update", "tableName": "테이블명", "measureName": "측정값명", "updateDefinition": {"expression": "새 DAX 식"}}}
+삭제: toolName: "measure_operations", toolArguments: {"request": {"operation": "Delete", "tableName": "테이블명", "measureName": "측정값명", "shouldCascadeDelete": true}}
 
-**응답** (JSON-RPC 래핑 없이 result만 반환):
-```json
-{
-  "tools": [
-    {
-      "name": "table_operations",
-      "description": "...",
-      "inputSchema": { ... }
-    }
-  ]
-}
+### relationship_operations — 관계 관리
+목록: toolName: "relationship_operations", toolArguments: {"request": {"operation": "List"}}
+조회: toolName: "relationship_operations", toolArguments: {"request": {"operation": "Get", "relationshipName": "관계명"}}
+생성: toolName: "relationship_operations", toolArguments: {"request": {"operation": "Create", "relationshipDefinition": {"name": "이름", "fromTable": "테이블A", "fromColumn": "컬럼A", "toTable": "테이블B", "toColumn": "컬럼B", "fromCardinality": "many", "toCardinality": "one", "crossFilteringBehavior": "oneDirection"}}}
+수정: toolName: "relationship_operations", toolArguments: {"request": {"operation": "Update", "relationshipName": "이름", "relationshipUpdate": {"crossFilteringBehavior": "bothDirections"}}}
+삭제: toolName: "relationship_operations", toolArguments: {"request": {"operation": "Delete", "relationshipName": "이름"}}
+
+### dax_query_operations — DAX 쿼리
+실행: toolName: "dax_query_operations", toolArguments: {"request": {"operation": "Execute", "query": "EVALUATE ROW(\"Result\", 1+1)"}}
+
+### batch_measure_operations — 일괄 측정값
+일괄 생성: toolName: "batch_measure_operations", toolArguments: {"request": {"operation": "BatchCreate", "batchCreateRequest": {"items": [{"tableName": "테이블명", "name": "이름1", "expression": "DAX식1"}, {"tableName": "테이블명", "name": "이름2", "expression": "DAX식2"}]}}}
+일괄 삭제: toolName: "batch_measure_operations", toolArguments: {"request": {"operation": "BatchDelete", "batchDeleteRequest": {"items": ["측정값명1", "측정값명2"]}}}
+
+### partition_operations — 파티션 관리
+목록: toolName: "partition_operations", toolArguments: {"request": {"operation": "List", "tableName": "테이블명"}}
+생성: toolName: "partition_operations", toolArguments: {"request": {"operation": "Create", "tableName": "테이블명", "createDefinition": {"name": "파티션명", "source": {"type": "m", "expression": "let\n  Source = #table({\"Col\"}, {{1}})\nin\n  Source"}}}}
+수정: toolName: "partition_operations", toolArguments: {"request": {"operation": "Update", "tableName": "테이블명", "updateDefinition": {"tableName": "테이블명", "name": "파티션명", "description": "설명"}}}
+삭제: toolName: "partition_operations", toolArguments: {"request": {"operation": "Delete", "tableName": "테이블명", "partitionName": "파티션명"}}
+
+### connection_operations — 연결 관리 (자동 처리됨, 보통 직접 호출 불필요)
+연결 목록: toolName: "connection_operations", toolArguments: {"request": {"operation": "ListConnections"}}
+로컬 인스턴스: toolName: "connection_operations", toolArguments: {"request": {"operation": "ListLocalInstances"}}
+마지막 연결: toolName: "connection_operations", toolArguments: {"request": {"operation": "GetLastUsed"}}
+
+## 작업 순서
+1. HealthCheck로 연결 상태를 먼저 확인합니다.
+2. CallTool로 필요한 도구를 호출합니다.
+3. 도구나 파라미터가 불확실하면 해당 도구의 Help operation을 호출합니다: toolArguments: {"request": {"operation": "Help"}}
+4. 모든 도구는 Help operation을 지원하며, 사용 가능한 operation과 필수 파라미터를 알려줍니다.
+
+## 규칙
+- 사용자가 테이블 정보를 요청하면 먼저 table_operations의 List로 전체 목록을 조회합니다.
+- 복잡한 DAX 쿼리는 Validate로 검사 가능합니다. 단순 쿼리는 바로 Execute합니다.
+- 한국어 테이블명은 DAX에서 반드시 작은따옴표로 감쌉니다: SUM('판매'[수량])
+- 모델 변경(Create, Update, Delete) 전에 사용자에게 확인을 요청합니다.
+- 에러가 발생하면 사용자에게 이해하기 쉽게 설명합니다.
+- 한국어로 응답합니다.
+- connection_operations는 직접 호출하지 않습니다. Bridge가 자동 처리합니다.
+- 파라미터 구조를 모를 때는 해당 도구의 Help operation을 먼저 호출합니다.
 ```
 
 ---
 
-#### `POST /mcp/tools/call` - 도구 실행
+## 3. 실제 테스트 결과 (2026-02-21)
 
-**요청 Body** (평탄한 필드):
-```json
-{
-  "toolName": "table_operations",
-  "toolArguments": "{\"action\": \"List\"}"
-}
-```
+### 환경
+- Bridge: localhost:5050, Node.js
+- MCP: powerbi-modeling-mcp.exe
+- PBI Desktop: "07월08일실습" (port:12405)
 
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `toolName` | string | ✅ | 실행할 도구 이름 |
-| `toolArguments` | string | ✅ | 도구 인자 (JSON 문자열) |
+### 전체 테스트 결과 (37개)
 
-> **핵심**: `toolArguments`는 JSON 문자열로 전달됨. Copilot Studio에서 문자열은 전달 가능하므로, 중첩 객체 문제를 해결함.
+| 도구 | Operation | 결과 | 핵심 발견 |
+|------|-----------|------|-----------|
+| table_operations | List, Get, Create, Update, Delete | ✅ 전체 성공 | `createDefinition`, `shouldCascadeDelete` 필수 |
+| column_operations | List, Get, Create, Update, Delete | ✅ 전체 성공 | `createDefinition` 필수, 계산 컬럼만 생성 가능 |
+| measure_operations | List, Get, Create, Update, Delete | ✅ 전체 성공 | DAX에서 한국어 테이블명은 작은따옴표 필수 |
+| relationship_operations | List, Get, Create, Update, Delete | ✅ 전체 성공 | `relationshipDefinition`, `relationshipUpdate` 래핑 필수 |
+| dax_query_operations | Execute | ✅ 성공 | 14ms 응답 |
+| connection_operations | ListConnections, ListLocalInstances, GetLastUsed | ✅ 성공 | `Status`는 미지원, `ListConnections` 사용 |
+| batch_measure_operations | BatchCreate, BatchDelete | ✅ 성공 | BatchDelete의 items는 문자열 배열 |
+| partition_operations | List, Get, Create, Update, Delete | ✅ 전체 성공 | M expression 필요 |
 
-**내부 변환**: 서버가 JSON-RPC 요청으로 조립
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "<auto-generated-uuid>",
-  "method": "tools/call",
-  "params": {
-    "name": "table_operations",
-    "arguments": { "action": "List" }
-  }
-}
-```
-
-**응답** (JSON-RPC 래핑 없이 result만 반환):
-```json
-{
-  "content": [
-    {
-      "type": "text",
-      "text": "..."
-    }
-  ]
-}
-```
-
-**에러 응답**:
-```json
-{
-  "error": {
-    "code": -32602,
-    "message": "toolName is required"
-  }
-}
-```
-
-### 4.2 아키텍처 흐름
-
-```mermaid
-flowchart TD
-    subgraph Copilot Studio
-        CS[Power Fx Connector]
-    end
-    
-    subgraph Bridge Server
-        REST_LIST[POST /mcp/tools/list]
-        REST_CALL[POST /mcp/tools/call]
-        LEGACY[POST /mcp - JSON-RPC]
-        ADAPTER[REST-to-JSON-RPC Adapter]
-        MCP_CLIENT[McpClient.sendRequest]
-    end
-    
-    subgraph MCP Process
-        MCP[pbip-mcp-server.exe]
-    end
-    
-    CS -->|평탄 파라미터| REST_LIST
-    CS -->|toolName + toolArguments 문자열| REST_CALL
-    REST_LIST --> ADAPTER
-    REST_CALL --> ADAPTER
-    ADAPTER -->|JSON-RPC 조립| MCP_CLIENT
-    LEGACY -->|기존 JSON-RPC 그대로| MCP_CLIENT
-    MCP_CLIENT -->|stdio| MCP
-    MCP -->|JSON-RPC 응답| MCP_CLIENT
-    MCP_CLIENT -->|result 추출| ADAPTER
-    MCP_CLIENT -->|전체 응답| LEGACY
-```
-
-### 4.3 파일 변경 계획
-
-#### 신규 파일
-
-| 파일 | 설명 |
-|------|------|
-| `src/routes/mcp-rest.ts` | 평탄화된 REST 엔드포인트 라우터 |
-
-#### 수정 파일
-
-| 파일 | 변경 내용 |
-|------|-----------|
-| [`src/server.ts`](src/server.ts) | 새 라우터 등록: `app.use("/mcp/tools", ...)` |
-| [`connector/apiDefinition.swagger.json`](connector/apiDefinition.swagger.json) | 새 엔드포인트 2개 Swagger 정의 추가 |
-
-#### 변경 없는 파일
-
-| 파일 | 이유 |
-|------|------|
-| [`src/routes/mcp.ts`](src/routes/mcp.ts) | 기존 JSON-RPC 엔드포인트 그대로 유지 |
-| [`src/mcp-client.ts`](src/mcp-client.ts) | sendRequest 인터페이스 변경 없음 |
-| [`src/types.ts`](src/types.ts) | 기존 타입 변경 없음 (새 타입은 mcp-rest.ts에 정의) |
-
-### 4.4 `src/routes/mcp-rest.ts` 설계
-
-```typescript
-// 새 라우터: REST 평탄 엔드포인트
-import { Router, Request, Response } from "express";
-import { McpClient } from "../mcp-client";
-import { JsonRpcRequest, McpProcessState } from "../types";
-import { randomUUID } from "crypto";
-
-// 평탄화된 요청 타입
-interface ToolCallRequest {
-  toolName: string;
-  toolArguments: string; // JSON 문자열
-}
-
-export function createMcpRestRouter(mcpClient: McpClient): Router {
-  const router = Router();
-
-  // POST /mcp/tools/list
-  router.post("/list", async (req: Request, res: Response) => {
-    // 1. MCP 프로세스 상태 확인
-    // 2. JSON-RPC 요청 조립: { jsonrpc: "2.0", id: uuid, method: "tools/list", params: {} }
-    // 3. mcpClient.sendRequest() 호출
-    // 4. 응답에서 result만 추출하여 반환 (또는 error 처리)
-  });
-
-  // POST /mcp/tools/call
-  router.post("/call", async (req: Request, res: Response) => {
-    // 1. toolName, toolArguments 검증
-    // 2. toolArguments JSON 파싱 (실패 시 400 에러)
-    // 3. MCP 프로세스 상태 확인
-    // 4. JSON-RPC 요청 조립:
-    //    { jsonrpc: "2.0", id: uuid, method: "tools/call",
-    //      params: { name: toolName, arguments: parsedArgs } }
-    // 5. mcpClient.sendRequest() 호출
-    // 6. 응답에서 result만 추출하여 반환 (또는 error 처리)
-  });
-
-  return router;
-}
-```
-
-### 4.5 `src/server.ts` 변경
-
-```typescript
-// 기존 코드에 추가
-import { createMcpRestRouter } from "./routes/mcp-rest";
-
-// 라우트 등록 부분에 추가
-app.use("/mcp", createMcpRouter(mcpClient));           // 기존 유지
-app.use("/mcp/tools", createMcpRestRouter(mcpClient));  // 새로 추가
-app.use("/health", createHealthRouter(mcpClient));
-```
-
-> **라우트 순서 참고**: Express는 구체적인 경로(`/mcp/tools/list`)를 먼저 매칭하므로, `/mcp/tools`를 `/mcp` 뒤에 등록해도 정상 동작함. `/mcp/tools/list`로 들어온 요청은 `/mcp/tools` 라우터가 처리하고, `/mcp`로 들어온 요청은 기존 라우터가 처리함.
-
-### 4.6 Swagger 정의 변경
-
-기존 `/mcp`와 `/health` 경로는 유지하고, 아래 2개 경로를 추가:
-
-```json
-{
-  "/mcp/tools/list": {
-    "post": {
-      "operationId": "ListTools",
-      "summary": "사용 가능한 MCP 도구 목록 조회",
-      "description": "MCP 서버에서 사용 가능한 도구 목록을 조회합니다",
-      "parameters": [
-        {
-          "name": "X-API-Key",
-          "in": "header",
-          "required": false,
-          "type": "string",
-          "description": "API Key",
-          "x-ms-summary": "API Key"
-        }
-      ],
-      "responses": {
-        "200": {
-          "description": "도구 목록",
-          "schema": {
-            "type": "object",
-            "properties": {
-              "tools": {
-                "type": "array",
-                "description": "사용 가능한 도구 목록",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "name": {
-                      "type": "string",
-                      "description": "도구 이름"
-                    },
-                    "description": {
-                      "type": "string",
-                      "description": "도구 설명"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  },
-  "/mcp/tools/call": {
-    "post": {
-      "operationId": "CallTool",
-      "summary": "MCP 도구 실행",
-      "description": "지정한 MCP 도구를 실행하고 결과를 반환합니다",
-      "parameters": [
-        {
-          "name": "body",
-          "in": "body",
-          "required": true,
-          "schema": {
-            "type": "object",
-            "required": ["toolName", "toolArguments"],
-            "properties": {
-              "toolName": {
-                "type": "string",
-                "description": "실행할 도구 이름",
-                "x-ms-summary": "도구 이름"
-              },
-              "toolArguments": {
-                "type": "string",
-                "description": "도구 인자 - JSON 문자열",
-                "x-ms-summary": "도구 인자 JSON"
-              }
-            }
-          }
-        },
-        {
-          "name": "X-API-Key",
-          "in": "header",
-          "required": false,
-          "type": "string",
-          "description": "API Key",
-          "x-ms-summary": "API Key"
-        }
-      ],
-      "responses": {
-        "200": {
-          "description": "도구 실행 결과",
-          "schema": {
-            "type": "object",
-            "properties": {
-              "content": {
-                "type": "array",
-                "description": "실행 결과 컨텐츠",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "type": {
-                      "type": "string",
-                      "description": "컨텐츠 타입"
-                    },
-                    "text": {
-                      "type": "string",
-                      "description": "텍스트 결과"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "400": {
-          "description": "잘못된 요청 - toolName 누락 또는 toolArguments JSON 파싱 실패"
-        }
-      }
-    }
-  }
-}
-```
-
-## 5. Copilot Studio Power Fx 사용 예시
-
-### 도구 목록 조회
-```
-PowerBIMCPBridge.ListTools()
-```
-
-### 도구 실행
-```
-PowerBIMCPBridge.CallTool({
-    toolName: "table_operations",
-    toolArguments: "{""action"": ""List""}"
-})
-```
-
-### DAX 쿼리 실행 예시
-```
-PowerBIMCPBridge.CallTool({
-    toolName: "execute_dax",
-    toolArguments: "{""query"": ""EVALUATE ROW('Sales', SUM(Sales[Amount]))""}"
-})
-```
-
-## 6. 에러 처리 매핑
-
-| 상황 | HTTP 상태 | 응답 |
-|------|-----------|------|
-| `toolName` 누락 | 400 | `{ "error": { "code": -32602, "message": "toolName is required" } }` |
-| `toolArguments` JSON 파싱 실패 | 400 | `{ "error": { "code": -32602, "message": "toolArguments is not valid JSON" } }` |
-| MCP 프로세스 미실행 | 502 | `{ "error": { "code": -32001, "message": "MCP process not running" } }` |
-| MCP 요청 타임아웃 | 504 | `{ "error": { "code": -32002, "message": "MCP request timed out" } }` |
-| MCP 요청 실패 | 502 | `{ "error": { "code": -32003, "message": "MCP request failed" } }` |
-| 서버 내부 오류 | 500 | `{ "error": { "code": -32603, "message": "Internal server error" } }` |
-
-## 7. 구현 체크리스트
-
-- [ ] `src/routes/mcp-rest.ts` 신규 파일 생성
-  - [ ] `POST /list` 핸들러 구현
-  - [ ] `POST /call` 핸들러 구현 (toolArguments JSON 파싱 포함)
-  - [ ] 공통 에러 처리 헬퍼 함수
-- [ ] `src/server.ts` 수정: 새 라우터 등록
-- [ ] `connector/apiDefinition.swagger.json` 수정: 2개 엔드포인트 추가
-- [ ] 기존 `POST /mcp` 엔드포인트 정상 동작 확인 (회귀 테스트)
-- [ ] 새 엔드포인트 수동 테스트
-  - [ ] `POST /mcp/tools/list` 정상 응답 확인
-  - [ ] `POST /mcp/tools/call` 정상 응답 확인
-  - [ ] `POST /mcp/tools/call` 에러 케이스 확인 (toolName 누락, 잘못된 JSON)
+### 주요 발견 사항
+1. **CreateDefinition 패턴**: table, column, partition은 `createDefinition` 래핑 필수
+2. **RelationshipDefinition 패턴**: relationship은 `relationshipDefinition` 래핑 필수
+3. **shouldCascadeDelete**: table, measure Delete 시 필수
+4. **한국어 DAX**: `SUM('판매'[수량])` (작은따옴표 필수)
+5. **connection_operations**: `Status` 미지원 → `ListConnections` 사용
+6. **batch_measure BatchDelete**: items는 `["이름1", "이름2"]` 문자열 배열
+7. **모든 도구 Help 지원**: `{"request": {"operation": "Help"}}` 로 파라미터 확인 가능
