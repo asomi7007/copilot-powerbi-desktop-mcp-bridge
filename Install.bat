@@ -3,18 +3,21 @@ setlocal
 chcp 65001 > nul
 title Power BI MCP Bridge - Installer
 
-REM 더블클릭 진입점.
-REM PowerShell 5.1 기본 동봉 Windows 10/11에서 동작.
-REM install-all.ps1이 내부적으로 UAC 자동 승격을 수행하므로
-REM 여기서는 단순히 PowerShell을 호출하기만 한다.
+REM ============================================================
+REM  Double-click entry point.
+REM  This .bat is intentionally ASCII-only so that Korean Windows
+REM  cmd.exe (CP949) does not misparse UTF-8 multi-byte sequences.
+REM  All localized text is printed by install-all.ps1, which runs
+REM  with explicit UTF-8 console encoding.
+REM ============================================================
 
 set "SCRIPT=%~dp0scripts\install-all.ps1"
 
 if not exist "%SCRIPT%" (
-    echo [ERROR] 설치 스크립트를 찾을 수 없습니다:
+    echo [ERROR] Could not find install-all.ps1 at:
     echo         %SCRIPT%
     echo.
-    echo 이 파일은 Bridge 프로젝트 루트에서 실행되어야 합니다.
+    echo Run this file from the extracted Bridge folder root.
     echo.
     pause
     exit /b 1
@@ -22,11 +25,11 @@ if not exist "%SCRIPT%" (
 
 echo.
 echo ===============================================================
-echo   Power BI MCP Bridge - 통합 설치 마법사
+echo   Power BI MCP Bridge - Installer
 echo ===============================================================
 echo.
-echo   잠시 후 PowerShell 창이 열립니다.
-echo   관리자 권한 요청(UAC)이 표시되면 [예]를 클릭해주세요.
+echo   Launching PowerShell installer...
+echo   Click [Yes] on the UAC prompt when it appears.
 echo.
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
@@ -34,8 +37,8 @@ set "EXITCODE=%ERRORLEVEL%"
 
 if not "%EXITCODE%"=="0" (
     echo.
-    echo [WARN] 설치 스크립트가 종료 코드 %EXITCODE% 로 종료되었습니다.
-    echo        자세한 내용은 PowerShell 창의 메시지와 로그 파일을 확인하세요.
+    echo [WARN] Installer exited with code %EXITCODE%.
+    echo        See the PowerShell output and the log file for details.
     echo.
     pause
 )
