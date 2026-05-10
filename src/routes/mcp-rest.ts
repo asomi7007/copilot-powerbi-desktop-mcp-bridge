@@ -2,6 +2,11 @@ import { Router, Request, Response } from "express";
 import { McpClient } from "../mcp-client";
 import { McpProcessState, JsonRpcResponse } from "../types";
 import { getLogger } from "../logger";
+import {
+  FILESYSTEM_TOOL_SCHEMAS,
+  FilesystemToolHandler,
+  isFilesystemTool,
+} from "../filesystem-tools";
 
 /**
  * toolArguments를 다양한 입력 형식에서 안전하게 파싱합니다.
@@ -202,15 +207,15 @@ function isConnectionError(response: JsonRpcResponse): boolean {
  */
 function isResultContainingError(response: any): { hasError: boolean; errorText?: string } {
   if (!response.result) return { hasError: false };
-
+  
   const result = response.result as { content?: Array<{ type?: string; text?: string }>, isError?: boolean };
-
+  
   // MCP 서버가 isError 플래그를 설정한 경우 (확실한 에러)
   if (result.isError === true) {
     const text = result.content?.map((c: any) => c.text).join('\n') || 'Unknown error';
     return { hasError: true, errorText: text };
   }
-
+  
   // content[].text에서 MCP 응답 JSON 파싱하여 success:false 체크
   if (result.content && Array.isArray(result.content)) {
     for (const item of result.content) {
@@ -230,7 +235,7 @@ function isResultContainingError(response: any): { hasError: boolean; errorText?
       }
     }
   }
-
+  
   return { hasError: false };
 }
 
@@ -242,12 +247,12 @@ function validateOperationArguments(toolName: string, args: Record<string, unkno
   { valid: boolean; operation?: string; missingFields: string[] } {
   const request = args?.request as Record<string, unknown> | undefined;
   if (!request) return { valid: false, missingFields: ['request'] };
-
+  
   const operation = request.operation as string | undefined;
   if (!operation) return { valid: false, missingFields: ['request.operation'] };
-
+  
   const missing: string[] = [];
-
+  
   if (toolName === 'relationship_operations') {
     if (operation === 'Create') {
       // relationshipDefinition이 있거나, flat 파라미터(fromTable 등)가 있으면 OK
@@ -265,13 +270,13 @@ function validateOperationArguments(toolName: string, args: Record<string, unkno
       missing.push('request.relationshipName');
     }
   }
-
+  
   if (toolName === 'dax_query_operations') {
     if (operation === 'Execute' && !request.query) {
       missing.push('request.query (DAX query string is required)');
     }
   }
-
+  
   if (toolName === 'measure_operations') {
     if (operation === 'Create') {
       if (!request.tableName) missing.push('request.tableName');
@@ -279,7 +284,7 @@ function validateOperationArguments(toolName: string, args: Record<string, unkno
       if (!request.expression) missing.push('request.expression');
     }
   }
-
+  
   if (toolName === 'column_operations') {
     if (operation === 'List' && !request.tableName) {
       missing.push('request.tableName');
@@ -318,7 +323,7 @@ function validateOperationArguments(toolName: string, args: Record<string, unkno
       if (!request.newName) missing.push('request.newName');
     }
   }
-
+  
   return { valid: missing.length === 0, operation, missingFields: missing };
 }
 
@@ -602,7 +607,10 @@ function extractPortFromResponse(response: JsonRpcResponse): number | null {
   return null;
 }
 
-export function createMcpRestRouter(mcpClient: McpClient): Router {
+export function createMcpRestRouter(
+  mcpClient: McpClient,
+  fsHandler?: FilesystemToolHandler
+): Router {
   const router = Router();
   const logger = getLogger();
 
@@ -695,24 +703,30 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
    */
   router.post("/tools/list", async (req: Request, res: Response) => {
     try {
-      if (!checkMcpRunning(req, res)) return;
-
-      const jsonRpcRequest = {
-        jsonrpc: "2.0" as const,
-        id: `rest-list-${Date.now()}`,
-        method: "tools/list",
-        params: {},
-      };
-
-      const response = await mcpClient.sendRequest(jsonRpcRequest);
-      
-      // JSON-RPC 래핑 제거, result만 반환
-      if (response.error) {
-        logger.error(`MCP tools/list returned error: ${JSON.stringify(response.error)}`);
-        res.status(400).json({ error: response.error });
+      // Power BI MCP 도구 (프로세스가 살아있을 때만; 죽어있으면 빈 배열로 폴백)
+      let powerBiTools: unknown[] = [];
+      if (mcpClient.getState() === McpProcessState.RUNNING) {
+        const jsonRpcRequest = {
+          jsonrpc: "2.0" as const,
+          id: `rest-list-${Date.now()}`,
+          method: "tools/list",
+          params: {},
+        };
+        const response = await mcpClient.sendRequest(jsonRpcRequest);
+        if (response.error) {
+          logger.warn(`MCP tools/list returned error: ${JSON.stringify(response.error)} — proceeding with filesystem tools only`);
+        } else {
+          const result = response.result as { tools?: unknown[] } | undefined;
+          if (result && Array.isArray(result.tools)) powerBiTools = result.tools;
+        }
       } else {
-        res.json(response.result || { tools: [] });
+        logger.warn(`Power BI MCP not running (state: ${mcpClient.getState()}) — returning filesystem tools only`);
       }
+
+      // Filesystem 도구 (Bridge 내장)
+      const fsTools = fsHandler ? FILESYSTEM_TOOL_SCHEMAS : [];
+
+      res.json({ tools: [...powerBiTools, ...fsTools] });
     } catch (error) {
       logger.error(`MCP REST tools/list error: ${error}`);
       res.status(500).json({ error: { code: -32603, message: "Internal server error" } });
@@ -734,8 +748,6 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
    */
   router.post("/tools/call", async (req: Request, res: Response) => {
     try {
-      if (!checkMcpRunning(req, res)) return;
-
       const { toolName, toolArguments } = req.body;
 
       // ─── Copilot Studio 디버깅: raw toolArguments 상세 로깅 ───
@@ -747,6 +759,26 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
         });
         return;
       }
+
+      // ─── 멀티 MCP 라우팅: filesystem 도구는 Bridge가 직접 처리 ───
+      if (fsHandler && isFilesystemTool(toolName)) {
+        const fsArgs =
+          toolArguments && typeof toolArguments === "object" && !Array.isArray(toolArguments)
+            ? (toolArguments as Record<string, unknown>)
+            : typeof toolArguments === "string" && toolArguments.length > 0
+            ? (() => {
+                try { return JSON.parse(toolArguments) as Record<string, unknown>; }
+                catch { return {}; }
+              })()
+            : {};
+        logger.info(`[FS TOOL] '${toolName}' args=${JSON.stringify(fsArgs).substring(0, 300)}`);
+        const result = await fsHandler.handle(toolName, fsArgs);
+        res.json(result);
+        return;
+      }
+
+      // 이하 Power BI MCP 도구 흐름 — MCP 프로세스 가동 확인
+      if (!checkMcpRunning(req, res)) return;
 
       // 다양한 형식의 toolArguments를 안전하게 파싱
       const parseResult = parseToolArguments(toolArguments, toolName);
@@ -858,7 +890,7 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
         });
       } else {
         const result = response.result || {};
-
+        
         // ─── 수정 1: MCP 응답 내 에러 감지 ───
         const errorCheck = isResultContainingError(response);
         if (errorCheck.hasError) {

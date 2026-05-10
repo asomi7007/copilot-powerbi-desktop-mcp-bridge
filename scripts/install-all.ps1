@@ -497,6 +497,16 @@ function Initialize-LocalBridge {
         Write-Info "기존 config.yaml 보존: $config"
     }
 
+    # filesystem 도구 샌드박스 폴더 자동 생성 (config의 allowedPaths가 비어있어도
+    # Bridge 시작 시 같은 위치를 만들지만, 사용자에게 폴더 위치를 미리 보여주기 위함).
+    $workspace = Join-Path $ProjectRoot 'workspace'
+    if (-not (Test-Path $workspace)) {
+        New-Item -ItemType Directory -Path $workspace -Force | Out-Null
+        Write-Ok "filesystem 샌드박스 생성: $workspace"
+    } else {
+        Write-Info "filesystem 샌드박스 존재: $workspace"
+    }
+
     if (Read-YesNo "바탕화면에 시작 바로가기를 만들까요?" 'Y') {
         New-DesktopShortcut -ProjectRoot $ProjectRoot
     }
@@ -624,6 +634,13 @@ Write-Host "  2) Bridge 시작 (또는 바탕화면 바로가기 더블클릭):"
 Write-Host "       cd `"$bridgeRoot`"" -ForegroundColor DarkGray
 Write-Host "       .\scripts\start.ps1" -ForegroundColor DarkGray
 Write-Host "  3) http://localhost:5050/health 에서 상태 확인"
+$workspaceHint = Join-Path $bridgeRoot 'workspace'
+if (Test-Path $workspaceHint) {
+    Write-Host ""
+    Write-Host "  파일 조작 MCP (filesystem) 샌드박스:" -ForegroundColor Cyan
+    Write-Host "    $workspaceHint" -ForegroundColor DarkGray
+    Write-Host "    Copilot Studio가 이 폴더 안에서만 read_file / write_file / list_directory 등을 수행합니다." -ForegroundColor DarkGray
+}
 Write-Host ""
 Write-Host "  로그: $script:LogFile" -ForegroundColor DarkGray
 Write-Host ""

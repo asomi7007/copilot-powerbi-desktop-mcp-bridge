@@ -38,6 +38,32 @@ export interface BridgeConfig {
     level: string;
     file?: string;
   };
+  filesystem: {
+    enabled: boolean;
+    // 파일 작업이 허용되는 디렉터리들의 절대 경로.
+    // 비어있으면 인덱스에서 install-path/workspace를 자동 추가.
+    allowedPaths: string[];
+    maxFileSizeBytes: number;
+    maxSearchResults: number;
+  };
+}
+
+// MCP tool schema (tools/list 응답)
+export interface McpToolSchema {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required?: string[];
+    additionalProperties?: boolean;
+  };
+}
+
+// MCP tools/call 결과
+export interface McpToolResult {
+  content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+  isError?: boolean;
 }
 
 // MCP 프로세스 상태

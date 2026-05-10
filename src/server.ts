@@ -2,6 +2,7 @@ import express, { Express } from "express";
 import cors from "cors";
 import { BridgeConfig } from "./types";
 import { McpClient } from "./mcp-client";
+import { FilesystemToolHandler } from "./filesystem-tools";
 import { createAuthMiddleware } from "./middleware/auth";
 import { requestLogger } from "./middleware/request-logger";
 import { errorHandler } from "./middleware/error-handler";
@@ -14,6 +15,16 @@ import { createHealthRouter } from "./routes/health";
  */
 export function createServer(config: BridgeConfig, mcpClient: McpClient): Express {
   const app = express();
+
+  // Filesystem 도구 핸들러 (디폴트 활성화, allowedPaths가 비어있어도 인스턴스화하여
+  // list_allowed_directories가 0개를 정직하게 반환하도록 함).
+  const fsHandler = config.filesystem.enabled
+    ? new FilesystemToolHandler({
+        allowedPaths: config.filesystem.allowedPaths,
+        maxFileSizeBytes: config.filesystem.maxFileSizeBytes,
+        maxSearchResults: config.filesystem.maxSearchResults,
+      })
+    : undefined;
 
   // CORS 설정
   app.use(cors({
@@ -32,19 +43,23 @@ export function createServer(config: BridgeConfig, mcpClient: McpClient): Expres
   app.use(createAuthMiddleware(config.security.apiKey));
 
   // 라우트 등록
-  app.use("/mcp", createMcpRestRouter(mcpClient));
-  app.use("/mcp", createMcpRouter(mcpClient));
+  app.use("/mcp", createMcpRestRouter(mcpClient, fsHandler));
+  app.use("/mcp", createMcpRouter(mcpClient, fsHandler));
   app.use("/health", createHealthRouter(mcpClient));
 
   // 루트 경로 - 간단한 정보 제공
   app.get("/", (req, res) => {
     res.json({
       name: "Copilot + Power BI Desktop MCP Bridge",
-      version: "1.0.0",
+      version: "1.1.0",
       endpoints: {
-        mcp: "POST /mcp - Send JSON-RPC requests to MCP process",
+        mcp: "POST /mcp - Send JSON-RPC requests (Power BI MCP + filesystem tools)",
         mcpTools: "POST /mcp/tools/list, POST /mcp/tools/call - REST API for MCP tools",
         health: "GET /health - Check bridge and MCP process status",
+      },
+      filesystem: {
+        enabled: config.filesystem.enabled,
+        allowedPaths: config.filesystem.allowedPaths,
       },
     });
   });

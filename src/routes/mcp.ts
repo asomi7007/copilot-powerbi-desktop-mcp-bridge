@@ -2,11 +2,19 @@ import { Router, Request, Response } from "express";
 import { McpClient } from "../mcp-client";
 import { JsonRpcRequest, McpProcessState } from "../types";
 import { getLogger } from "../logger";
+import {
+  FILESYSTEM_TOOL_SCHEMAS,
+  FilesystemToolHandler,
+  isFilesystemTool,
+} from "../filesystem-tools";
 
 /**
  * MCP 라우트 생성
  */
-export function createMcpRouter(mcpClient: McpClient): Router {
+export function createMcpRouter(
+  mcpClient: McpClient,
+  fsHandler?: FilesystemToolHandler
+): Router {
   const router = Router();
   const logger = getLogger();
 
@@ -52,6 +60,39 @@ export function createMcpRouter(mcpClient: McpClient): Router {
           },
         });
         return;
+      }
+
+      // ─── 멀티 MCP 라우팅: tools/list와 tools/call의 filesystem 도구는 ───
+      // ─── Power BI MCP 가동 여부와 무관하게 Bridge에서 직접 처리한다.   ───
+      if (fsHandler && request.method === "tools/list") {
+        let powerBiTools: unknown[] = [];
+        if (mcpClient.getState() === McpProcessState.RUNNING) {
+          try {
+            const upstream = await mcpClient.sendRequest(request);
+            const result = upstream.result as { tools?: unknown[] } | undefined;
+            if (result && Array.isArray(result.tools)) powerBiTools = result.tools;
+          } catch (e) {
+            logger.warn(`tools/list passthrough to MCP failed: ${e instanceof Error ? e.message : e}`);
+          }
+        }
+        res.json({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: { tools: [...powerBiTools, ...FILESYSTEM_TOOL_SCHEMAS] },
+        });
+        return;
+      }
+
+      if (fsHandler && request.method === "tools/call") {
+        const params = (request.params || {}) as { name?: string; arguments?: Record<string, unknown> };
+        if (typeof params.name === "string" && isFilesystemTool(params.name)) {
+          const fsArgs = (params.arguments && typeof params.arguments === "object")
+            ? params.arguments
+            : {};
+          const result = await fsHandler.handle(params.name, fsArgs);
+          res.json({ jsonrpc: "2.0", id: request.id, result });
+          return;
+        }
       }
 
       // MCP 프로세스 상태 확인

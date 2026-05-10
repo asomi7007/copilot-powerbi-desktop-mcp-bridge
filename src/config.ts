@@ -30,7 +30,43 @@ const DEFAULT_CONFIG: BridgeConfig = {
     level: "debug",
     file: undefined,
   },
+  filesystem: {
+    enabled: true,
+    // allowedPaths가 비어있으면 finalizeFilesystemConfig가 install-path/workspace를 자동 추가
+    allowedPaths: [],
+    maxFileSizeBytes: 10 * 1024 * 1024,
+    maxSearchResults: 1000,
+  },
 };
+
+/**
+ * filesystem 설정 후처리:
+ *  - allowedPaths가 비어있으면 자동으로 {install-path}/workspace 추가
+ *  - install-path는 pkg .exe면 .exe 디렉터리, node 실행이면 cwd
+ *  - workspace 폴더가 없으면 생성 시도 (실패해도 무시)
+ */
+function finalizeFilesystemConfig(config: BridgeConfig): void {
+  if (!config.filesystem.enabled) return;
+  if (config.filesystem.allowedPaths.length > 0) return;
+
+  // pkg로 빌드된 .exe면 process.execPath, 아니면 cwd
+  const isPkg = (process as any).pkg !== undefined;
+  const installRoot = isPkg
+    ? path.dirname(process.execPath)
+    : process.cwd();
+  const workspace = path.join(installRoot, "workspace");
+
+  try {
+    if (!fs.existsSync(workspace)) {
+      fs.mkdirSync(workspace, { recursive: true });
+      console.log(`[Config] Auto-created workspace: ${workspace}`);
+    }
+  } catch (err) {
+    console.warn(`[Config] Failed to create workspace folder: ${err}`);
+  }
+
+  config.filesystem.allowedPaths = [workspace];
+}
 
 /**
  * config.yaml 파일을 찾아서 로드
@@ -85,6 +121,22 @@ function applyEnvironmentOverrides(config: BridgeConfig): void {
   }
   if (process.env.LOG_FILE) {
     config.logging.file = process.env.LOG_FILE;
+  }
+
+  // filesystem 환경변수
+  if (process.env.FS_ENABLED) {
+    config.filesystem.enabled = /^(1|true|yes)$/i.test(process.env.FS_ENABLED);
+  }
+  if (process.env.FS_ALLOWED_PATHS) {
+    // 세미콜론 구분 (Windows path가 콜론을 안 쓰므로)
+    config.filesystem.allowedPaths = process.env.FS_ALLOWED_PATHS
+      .split(";")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+  }
+  if (process.env.FS_MAX_FILE_SIZE) {
+    const n = parseInt(process.env.FS_MAX_FILE_SIZE, 10);
+    if (Number.isFinite(n) && n > 0) config.filesystem.maxFileSizeBytes = n;
   }
 }
 
@@ -168,6 +220,9 @@ export function loadConfig(): BridgeConfig {
 
   // 4. CLI 인수 오버라이드
   applyCliOverrides(config);
+
+  // 5. filesystem 후처리 (allowedPaths 자동 결정)
+  finalizeFilesystemConfig(config);
 
   return config;
 }
