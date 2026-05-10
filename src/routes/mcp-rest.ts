@@ -197,6 +197,243 @@ function isConnectionError(response: JsonRpcResponse): boolean {
 }
 
 /**
+ * MCP 응답의 result.content[].text에 에러가 포함되어 있는지 감지합니다.
+ * MCP 서버는 에러를 HTTP 200 + result.content[].text에 담아 반환하는 경우가 있습니다.
+ */
+function isResultContainingError(response: any): { hasError: boolean; errorText?: string } {
+  if (!response.result) return { hasError: false };
+
+  const result = response.result as { content?: Array<{ type?: string; text?: string }>, isError?: boolean };
+
+  // MCP 서버가 isError 플래그를 설정한 경우 (확실한 에러)
+  if (result.isError === true) {
+    const text = result.content?.map((c: any) => c.text).join('\n') || 'Unknown error';
+    return { hasError: true, errorText: text };
+  }
+
+  // content[].text에서 MCP 응답 JSON 파싱하여 success:false 체크
+  if (result.content && Array.isArray(result.content)) {
+    for (const item of result.content) {
+      if (item.text && typeof item.text === 'string') {
+        try {
+          const parsed = JSON.parse(item.text);
+          if (parsed.success === false) {
+            return { hasError: true, errorText: item.text };
+          }
+        } catch {
+          // JSON 파싱 실패 시 텍스트 패턴 매칭 (폴백)
+          // "success":false 패턴 확인
+          if (item.text.includes('"success":false') || item.text.includes('"success": false')) {
+            return { hasError: true, errorText: item.text };
+          }
+        }
+      }
+    }
+  }
+
+  return { hasError: false };
+}
+
+/**
+ * operation별 필수 파라미터가 올바르게 전달되었는지 검증합니다.
+ * 누락된 경우 경고를 반환하지만, 요청 자체를 차단하지는 않습니다.
+ */
+function validateOperationArguments(toolName: string, args: Record<string, unknown>):
+  { valid: boolean; operation?: string; missingFields: string[] } {
+  const request = args?.request as Record<string, unknown> | undefined;
+  if (!request) return { valid: false, missingFields: ['request'] };
+
+  const operation = request.operation as string | undefined;
+  if (!operation) return { valid: false, missingFields: ['request.operation'] };
+
+  const missing: string[] = [];
+
+  if (toolName === 'relationship_operations') {
+    if (operation === 'Create') {
+      // relationshipDefinition이 있거나, flat 파라미터(fromTable 등)가 있으면 OK
+      if (!request.relationshipDefinition && !request.fromTable) {
+        missing.push('request.relationshipDefinition or flat params (request.fromTable, request.fromColumn, request.toTable, request.toColumn)');
+      }
+    }
+    if (operation === 'Update') {
+      if (!request.relationshipName) missing.push('request.relationshipName');
+      if (!request.relationshipUpdate && !request.crossFilteringBehavior && request.isActive === undefined && !request.securityFilteringBehavior) {
+        missing.push('request.relationshipUpdate or flat params (request.crossFilteringBehavior, request.isActive, etc.)');
+      }
+    }
+    if (operation === 'Delete' && !request.relationshipName) {
+      missing.push('request.relationshipName');
+    }
+  }
+
+  if (toolName === 'dax_query_operations') {
+    if (operation === 'Execute' && !request.query) {
+      missing.push('request.query (DAX query string is required)');
+    }
+  }
+
+  if (toolName === 'measure_operations') {
+    if (operation === 'Create') {
+      if (!request.tableName) missing.push('request.tableName');
+      if (!request.name) missing.push('request.name');
+      if (!request.expression) missing.push('request.expression');
+    }
+  }
+
+  if (toolName === 'column_operations') {
+    if (operation === 'List' && !request.tableName) {
+      missing.push('request.tableName');
+    }
+  }
+
+  if (toolName === 'partition_operations') {
+    if (operation === 'Update') {
+      if (!request.tableName && !request.partitionName) missing.push('request.tableName, request.partitionName');
+      if (!request.updateDefinition && !request.expression) {
+        missing.push('request.updateDefinition or request.expression (M expression for the partition)');
+      }
+    }
+    if (operation === 'Create') {
+      if (!request.tableName) missing.push('request.tableName');
+      if (!request.createDefinition && !request.expression) {
+        missing.push('request.createDefinition or request.expression');
+      }
+    }
+    if (operation === 'Delete' || operation === 'Refresh' || operation === 'Get') {
+      if (!request.tableName) missing.push('request.tableName');
+      if (!request.partitionName) missing.push('request.partitionName');
+    }
+  }
+
+  if (toolName === 'table_operations') {
+    if (operation === 'Create') {
+      if (!request.createDefinition && !request.tableName) {
+        missing.push('request.createDefinition or request.tableName');
+      }
+    }
+    if (operation === 'Update' || operation === 'Delete' || operation === 'Refresh' || operation === 'Get' || operation === 'Rename') {
+      if (!request.tableName) missing.push('request.tableName');
+    }
+    if (operation === 'Rename') {
+      if (!request.newName) missing.push('request.newName');
+    }
+  }
+
+  return { valid: missing.length === 0, operation, missingFields: missing };
+}
+
+/**
+ * Flat 파라미터를 MCP 서버가 기대하는 Nested 구조로 변환합니다.
+ * Copilot Studio는 Swagger에 명시된 flat 속성만 전달할 수 있으므로,
+ * Bridge에서 createDefinition/updateDefinition 등의 중첩 구조로 재구성합니다.
+ */
+function transformFlatToNestedArguments(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
+  const request = args?.request as Record<string, unknown> | undefined;
+  if (!request || !request.operation) return args;
+
+  const operation = (request.operation as string).toLowerCase();
+  const transformed = { ...args, request: { ...request } };
+  const req = transformed.request as Record<string, unknown>;
+
+  /** Helper: build an object from flat keys, removing them from req */
+  function extractFlat(keys: string[], keyMap?: Record<string, string>): Record<string, unknown> | null {
+    const obj: Record<string, unknown> = {};
+    let hasAny = false;
+    for (const key of keys) {
+      const val = req[key];
+      if (val !== undefined) {
+        const targetKey = keyMap?.[key] ?? key;
+        obj[targetKey] = val;
+        hasAny = true;
+      }
+    }
+    if (!hasAny) return null;
+    // remove extracted keys from req
+    for (const key of keys) {
+      if (req[key] !== undefined) delete req[key];
+    }
+    return obj;
+  }
+
+  // ─── relationship_operations ───
+  // MCP 서버는 relationshipDefinition (Create)과 relationshipUpdate (Update)를 기대합니다.
+  // 다른 도구들(table/measure/partition)은 createDefinition/updateDefinition을 사용하지만,
+  // relationship_operations만 다른 키 이름을 사용합니다.
+  if (toolName === 'relationship_operations') {
+    if (operation === 'create' && !req.relationshipDefinition) {
+      const flatKeys = ['fromTable', 'fromColumn', 'toTable', 'toColumn', 'crossFilteringBehavior', 'isActive', 'securityFilteringBehavior'];
+      if (req.fromTable || req.fromColumn || req.toTable || req.toColumn) {
+        const def = extractFlat(flatKeys);
+        if (def) req.relationshipDefinition = def;
+      }
+    }
+    if (operation === 'update' && !req.relationshipUpdate) {
+      const flatKeys = ['crossFilteringBehavior', 'isActive', 'securityFilteringBehavior'];
+      if (req.crossFilteringBehavior || req.isActive !== undefined || req.securityFilteringBehavior) {
+        const def = extractFlat(flatKeys);
+        if (def) req.relationshipUpdate = def;
+      }
+    }
+  }
+
+  // ─── partition_operations ───
+  if (toolName === 'partition_operations') {
+    if (operation === 'update' && !req.updateDefinition) {
+      if (req.expression || req.sourceType || req.mode || req.description) {
+        const def = extractFlat(['expression', 'sourceType', 'mode', 'description']);
+        if (def) req.updateDefinition = def;
+      }
+    }
+    if (operation === 'create' && !req.createDefinition) {
+      if (req.expression || req.sourceType || req.mode) {
+        // partitionName → name in createDefinition
+        const def = extractFlat(['partitionName', 'expression', 'sourceType', 'mode'], { partitionName: 'name' });
+        if (def) req.createDefinition = def;
+      }
+    }
+  }
+
+  // ─── table_operations ───
+  if (toolName === 'table_operations') {
+    if (operation === 'create' && !req.createDefinition) {
+      if (req.tableName || req.columns || req.partitions) {
+        // columns와 partitions가 JSON 문자열일 수 있으므로 파싱 시도
+        if (typeof req.columns === 'string') {
+          try { req.columns = JSON.parse(req.columns as string); } catch { /* keep as-is */ }
+        }
+        if (typeof req.partitions === 'string') {
+          try { req.partitions = JSON.parse(req.partitions as string); } catch { /* keep as-is */ }
+        }
+        // tableName → name in createDefinition
+        const def = extractFlat(['tableName', 'columns', 'partitions', 'description'], { tableName: 'name' });
+        if (def) req.createDefinition = def;
+        // tableName은 createDefinition.name에 매핑되었지만, 기존 위치에도 유지하려면 복원
+        // (extractFlat이 이미 삭제했으므로 원래 값을 복원)
+        if (request.tableName) req.tableName = request.tableName;
+      }
+    }
+    if (operation === 'update' && !req.updateDefinition) {
+      if (req.description !== undefined || req.isHidden !== undefined) {
+        const def = extractFlat(['description', 'isHidden']);
+        if (def) req.updateDefinition = def;
+      }
+    }
+  }
+
+  // ─── measure_operations ───
+  if (toolName === 'measure_operations') {
+    if (operation === 'update' && !req.updateDefinition) {
+      if (req.expression || req.description !== undefined || req.formatString || req.displayFolder || req.isHidden !== undefined) {
+        const def = extractFlat(['expression', 'description', 'formatString', 'displayFolder', 'isHidden']);
+        if (def) req.updateDefinition = def;
+      }
+    }
+  }
+
+  return transformed;
+}
+
+/**
  * 로컬 Power BI Desktop 인스턴스를 자동으로 찾아 연결합니다.
  *
  * 순서:
@@ -534,10 +771,21 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
         logger.warn(`⚠️ Using DEFAULT arguments for tool '${toolName}' because toolArguments was ${toolArguments === null ? "null" : toolArguments === undefined ? "undefined" : "empty string"}. Copilot Studio may not be sending toolArguments correctly. Default: ${JSON.stringify(parsedArguments)}`);
       }
 
+      // ─── 수정 4: operation별 필수 파라미터 검증 ───
+      const validation = validateOperationArguments(toolName, parsedArguments);
+      let validationWarning: { operation?: string; missingFields: string[] } | null = null;
+      if (!validation.valid && validation.missingFields.length > 0) {
+        logger.warn(`⚠️ Missing required parameters for ${toolName}/${validation.operation || 'unknown'}: ${validation.missingFields.join(', ')}`);
+        validationWarning = { operation: validation.operation, missingFields: validation.missingFields };
+      }
+
       // ─── 자동 연결 보장 (connection_operations 자체 호출 시에는 스킵) ───
       if (toolName !== "connection_operations") {
         await ensureConnected();
       }
+
+      // ─── Flat → Nested 변환 적용 ───
+      const transformedArguments = transformFlatToNestedArguments(toolName, parsedArguments as Record<string, unknown>);
 
       const jsonRpcRequest = {
         jsonrpc: "2.0" as const,
@@ -545,15 +793,21 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
         method: "tools/call",
         params: {
           name: toolName,
-          arguments: parsedArguments,
+          arguments: transformedArguments,
         },
       };
 
       logger.debug(
-        `MCP REST tools/call: tool='${toolName}', arguments=${JSON.stringify(parsedArguments)}`
+        `MCP REST tools/call: tool='${toolName}', arguments=${JSON.stringify(transformedArguments)}`
       );
 
+      // ─── MCP 요청 info 레벨 로깅 (원본 + 변환 후) ───
+      logger.info(`[MCP REQUEST] tool='${toolName}', originalArgs=${JSON.stringify(parsedArguments).substring(0, 300)}, transformedArgs=${JSON.stringify(transformedArguments).substring(0, 500)}`);
+
       let response = await mcpClient.sendRequest(jsonRpcRequest);
+
+      // ─── MCP 응답 info 레벨 로깅 ───
+      logger.info(`[MCP RESPONSE] tool='${toolName}', response=${JSON.stringify(response).substring(0, 500)}`);
 
       // ─── 연결 에러 감지 시 자동 재연결 및 재시도 ───
       if (toolName !== "connection_operations" && isConnectionError(response)) {
@@ -571,7 +825,7 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
             method: "tools/call",
             params: {
               name: toolName,
-              arguments: parsedArguments,
+              arguments: transformedArguments,
             },
           };
           response = await mcpClient.sendRequest(retryRequest);
@@ -604,20 +858,44 @@ export function createMcpRestRouter(mcpClient: McpClient): Router {
         });
       } else {
         const result = response.result || {};
-        
+
+        // ─── 수정 1: MCP 응답 내 에러 감지 ───
+        const errorCheck = isResultContainingError(response);
+        if (errorCheck.hasError) {
+          logger.warn(`⚠️ [MCP RESULT ERROR] tool='${toolName}': MCP returned HTTP 200 but result contains error: ${errorCheck.errorText?.substring(0, 300)}`);
+        }
+
+        // 응답 객체 구성
+        const responsePayload: Record<string, unknown> = { ...result as Record<string, unknown> };
+
+        // 에러가 감지된 경우 메타데이터 추가
+        if (errorCheck.hasError) {
+          responsePayload._bridge_error_detected = {
+            message: "MCP server returned success (HTTP 200) but the result content contains an error.",
+            errorText: errorCheck.errorText,
+            suggestion: `Check the tool arguments for '${toolName}'. Ensure all required parameters are provided correctly.`,
+          };
+        }
+
+        // 수정 4: 검증 경고가 있는 경우 메타데이터 추가
+        if (validationWarning) {
+          responsePayload._bridge_validation_warning = {
+            message: `Missing required parameters for ${toolName}/${validationWarning.operation || 'unknown'}`,
+            missingFields: validationWarning.missingFields,
+            suggestion: "Ensure Copilot Studio sends all required fields in toolArguments.",
+          };
+        }
+
         // 기본값 폴백이 사용된 경우, 응답에 경고 메타데이터를 추가
         if (usedDefaultArgs) {
-          res.json({
-            ...result as Record<string, unknown>,
-            _bridge_warning: {
-              message: `toolArguments was not provided (was ${toolArguments === null ? "null" : toolArguments === undefined ? "undefined" : "empty string"}). Used default arguments: ${JSON.stringify(parsedArguments)}. If you intended a different operation (e.g., Delete, Create), ensure Copilot Studio sends toolArguments correctly. Check that the latest Swagger (with toolArguments type: "object") is uploaded to Power Platform.`,
-              defaultArgumentsUsed: parsedArguments,
-              receivedToolArguments: toolArguments ?? null,
-            },
-          });
-        } else {
-          res.json(result);
+          responsePayload._bridge_warning = {
+            message: `toolArguments was not provided (was ${toolArguments === null ? "null" : toolArguments === undefined ? "undefined" : "empty string"}). Used default arguments: ${JSON.stringify(parsedArguments)}. If you intended a different operation (e.g., Delete, Create), ensure Copilot Studio sends toolArguments correctly. Check that the latest Swagger (with toolArguments type: "object") is uploaded to Power Platform.`,
+            defaultArgumentsUsed: parsedArguments,
+            receivedToolArguments: toolArguments ?? null,
+          };
         }
+
+        res.json(responsePayload);
       }
     } catch (error) {
       if (error instanceof Error && error.message.includes("timeout")) {
