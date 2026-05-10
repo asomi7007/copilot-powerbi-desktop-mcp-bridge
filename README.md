@@ -129,14 +129,14 @@ Power BI Desktop의 데이터 모델을 Microsoft Copilot Studio에서 활용할
 
 ```powershell
 # PowerShell을 관리자로 실행한 후
-irm https://raw.githubusercontent.com/your-org/copilot-powerbi-desktop-mcp-bridge/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/asomi7007/copilot-powerbi-desktop-mcp-bridge/master/scripts/install.ps1 | iex
 ```
 
 ### 방법 3: 소스에서 설치 (개발자)
 
 ```bash
 # Node.js 20 이상 필요
-git clone https://github.com/your-org/copilot-powerbi-desktop-mcp-bridge.git
+git clone https://github.com/asomi7007/copilot-powerbi-desktop-mcp-bridge.git
 cd copilot-powerbi-desktop-mcp-bridge
 npm install
 npm run build
@@ -197,7 +197,7 @@ Bridge는 시작 시 `powerbi-modeling-mcp.exe`를 다음 순서로 자동 탐�
 **옵션 B: 소스 설치**
 
 ```bash
-git clone https://github.com/your-org/copilot-powerbi-desktop-mcp-bridge.git
+git clone https://github.com/asomi7007/copilot-powerbi-desktop-mcp-bridge.git
 cd copilot-powerbi-desktop-mcp-bridge
 npm install
 npm run build

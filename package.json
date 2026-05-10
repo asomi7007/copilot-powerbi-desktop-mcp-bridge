@@ -10,11 +10,11 @@
     "dev": "ts-node src/index.ts",
     "clean": "rimraf dist",
     "lint": "eslint src/",
-    "pkg:build": "npm run build && pkg dist/index.js --targets node20-win-x64 --output release/pbi-mcp-bridge.exe --config package.json"
+    "pkg:build": "npm run build && pkg dist/index.js --targets node18-win-x64 --output release/pbi-mcp-bridge.exe --config package.json"
   },
   "pkg": {
     "assets": ["config.example.yaml"],
-    "targets": ["node20-win-x64"]
+    "targets": ["node18-win-x64"]
   },
   "keywords": ["mcp", "power-bi", "copilot", "bridge", "stdio", "http"],
   "author": "Dream I System",

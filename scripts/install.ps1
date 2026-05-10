@@ -94,7 +94,7 @@ if (-not (Test-Path $InstallPath)) {
 Write-Host ""
 Write-Host "🌐 GitHub에서 최신 릴리스 확인 중..." -ForegroundColor Cyan
 
-$repo = "your-org/copilot-powerbi-desktop-mcp-bridge"  # TODO: 실제 repo 경로로 변경
+$repo = "asomi7007/copilot-powerbi-desktop-mcp-bridge"
 $releaseUrl = "https://api.github.com/repos/$repo/releases/latest"
 
 try {
