@@ -1,5 +1,5 @@
-# Power BI MCP Bridge 설치 스크립트
-# 비개발자가 쉽게 실행할 수 있는 원클릭 설치 프로그램
+# Power BI MCP Bridge installer
+# One-click installer that downloads the latest GitHub release and unpacks it.
 
 param(
     [string]$InstallPath = "C:\pbi-mcp-bridge",
@@ -7,92 +7,91 @@ param(
     [switch]$CreateDesktopShortcut
 )
 
-# UTF-8 출력 설정
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Power BI MCP Bridge 설치 프로그램" -ForegroundColor Cyan  
+Write-Host "  Power BI MCP Bridge Installer" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 관리자 권한 확인
+# Admin rights check
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
 if (-not $isAdmin) {
-    Write-Host "⚠️  경고: 관리자 권한으로 실행되지 않았습니다." -ForegroundColor Yellow
-    Write-Host "   일부 기능(winget, 시작프로그램 등록)이 제한될 수 있습니다." -ForegroundColor Yellow
+    Write-Host "[!]  Not running as Administrator." -ForegroundColor Yellow
+    Write-Host "     Some steps (winget, startup registration) may be limited." -ForegroundColor Yellow
     Write-Host ""
 }
 
-# 실행 정책 확인
+# Execution policy check
 $executionPolicy = Get-ExecutionPolicy -Scope CurrentUser
 if ($executionPolicy -eq "Restricted") {
-    Write-Host "🔒 실행 정책이 제한되어 있습니다." -ForegroundColor Yellow
-    Write-Host "   다음 명령으로 실행 정책을 변경하세요:" -ForegroundColor Yellow
-    Write-Host "   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser" -ForegroundColor White
+    Write-Host "[Lock] Execution policy is Restricted." -ForegroundColor Yellow
+    Write-Host "       To loosen it run:" -ForegroundColor Yellow
+    Write-Host "       Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser" -ForegroundColor White
     Write-Host ""
-    $continue = Read-Host "계속하시겠습니까? (Y/N)"
+    $continue = Read-Host "Continue anyway? (Y/N)"
     if ($continue -ne "Y" -and $continue -ne "y") {
         exit 1
     }
 }
 
-Write-Host "📦 설치 위치: $InstallPath" -ForegroundColor Green
+Write-Host "[Pkg] Install path: $InstallPath" -ForegroundColor Green
 Write-Host ""
 
-# Node.js 설치 확인
+# Node.js check
 if (-not $SkipNodeCheck) {
-    Write-Host "🔍 Node.js 설치 확인 중..." -ForegroundColor Cyan
+    Write-Host "Checking Node.js..." -ForegroundColor Cyan
     try {
         $nodeVersion = node --version 2>$null
         if ($nodeVersion) {
-            Write-Host "   ✅ Node.js $nodeVersion 설치됨" -ForegroundColor Green
+            Write-Host "   [OK] Node.js $nodeVersion" -ForegroundColor Green
         }
     } catch {
-        Write-Host "   ❌ Node.js가 설치되지 않았습니다." -ForegroundColor Red
+        Write-Host "   [X] Node.js is not installed." -ForegroundColor Red
         Write-Host ""
-        Write-Host "Node.js 설치 방법:" -ForegroundColor Yellow
-        Write-Host "  1. winget으로 자동 설치 (권장)" -ForegroundColor White
-        Write-Host "  2. 수동 다운로드: https://nodejs.org" -ForegroundColor White
+        Write-Host "How to install Node.js:" -ForegroundColor Yellow
+        Write-Host "  1. winget (recommended)" -ForegroundColor White
+        Write-Host "  2. Manual: https://nodejs.org" -ForegroundColor White
         Write-Host ""
-        
-        $installNode = Read-Host "winget으로 Node.js를 설치하시겠습니까? (Y/N)"
+
+        $installNode = Read-Host "Install Node.js via winget? (Y/N)"
         if ($installNode -eq "Y" -or $installNode -eq "y") {
             try {
-                Write-Host "   Node.js 설치 중..." -ForegroundColor Cyan
+                Write-Host "   Installing Node.js..." -ForegroundColor Cyan
                 winget install OpenJS.NodeJS.LTS --silent
-                Write-Host "   ✅ Node.js 설치 완료" -ForegroundColor Green
-                Write-Host "   ⚠️  PowerShell을 다시 시작한 후 설치 스크립트를 재실행하세요." -ForegroundColor Yellow
+                Write-Host "   [OK] Node.js installed" -ForegroundColor Green
+                Write-Host "   [!]  Restart PowerShell, then re-run this installer." -ForegroundColor Yellow
                 exit 0
             } catch {
-                Write-Host "   ❌ winget 설치 실패: $_" -ForegroundColor Red
-                Write-Host "   수동으로 Node.js를 설치한 후 다시 시도하세요." -ForegroundColor Yellow
+                Write-Host "   [X] winget install failed: $_" -ForegroundColor Red
+                Write-Host "       Install Node.js manually and try again." -ForegroundColor Yellow
                 exit 1
             }
         } else {
-            Write-Host "   Node.js를 수동으로 설치한 후 이 스크립트를 다시 실행하세요." -ForegroundColor Yellow
+            Write-Host "   Install Node.js manually and re-run this installer." -ForegroundColor Yellow
             exit 1
         }
     }
 }
 
-# 설치 디렉토리 생성
+# Create install directory
 Write-Host ""
-Write-Host "📁 설치 디렉토리 생성 중..." -ForegroundColor Cyan
+Write-Host "Creating install directory..." -ForegroundColor Cyan
 if (-not (Test-Path $InstallPath)) {
     try {
         New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
-        Write-Host "   ✅ 디렉토리 생성: $InstallPath" -ForegroundColor Green
+        Write-Host "   [OK] Created: $InstallPath" -ForegroundColor Green
     } catch {
-        Write-Host "   ❌ 디렉토리 생성 실패: $_" -ForegroundColor Red
+        Write-Host "   [X] Failed to create directory: $_" -ForegroundColor Red
         exit 1
     }
 } else {
-    Write-Host "   ℹ️  디렉토리가 이미 존재합니다." -ForegroundColor Yellow
+    Write-Host "   [i] Directory already exists." -ForegroundColor Yellow
 }
 
-# GitHub에서 최신 릴리스 다운로드
+# Download latest GitHub release
 Write-Host ""
-Write-Host "🌐 GitHub에서 최신 릴리스 확인 중..." -ForegroundColor Cyan
+Write-Host "Looking up the latest GitHub release..." -ForegroundColor Cyan
 
 $repo = "asomi7007/copilot-powerbi-desktop-mcp-bridge"
 $releaseUrl = "https://api.github.com/repos/$repo/releases/latest"
@@ -102,89 +101,86 @@ try {
         "User-Agent" = "PowerShell"
     }
     $version = $release.tag_name
-    Write-Host "   최신 버전: $version" -ForegroundColor Green
-    
-    # ZIP 파일 찾기
-    $zipAsset = $release.assets | Where-Object { $_.name -like "*win-x64.zip" } | Select-Object -First 1
+    Write-Host "   Latest version: $version" -ForegroundColor Green
+
+    # Find the zip
+    $zipAsset = $release.assets | Where-Object { $_.name -like "*win-x64*.zip" } | Select-Object -First 1
     if (-not $zipAsset) {
-        throw "Windows x64 릴리스 파일을 찾을 수 없습니다."
+        throw "No Windows x64 zip asset found in the latest release."
     }
-    
+
     $downloadUrl = $zipAsset.browser_download_url
     $zipPath = Join-Path $env:TEMP "pbi-mcp-bridge.zip"
-    
-    Write-Host "   다운로드 중: $($zipAsset.name)" -ForegroundColor Cyan
+
+    Write-Host "   Downloading: $($zipAsset.name)" -ForegroundColor Cyan
     Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing
-    Write-Host "   ✅ 다운로드 완료" -ForegroundColor Green
-    
-    # 압축 해제
-    Write-Host "   압축 해제 중..." -ForegroundColor Cyan
+    Write-Host "   [OK] Downloaded" -ForegroundColor Green
+
+    Write-Host "   Extracting..." -ForegroundColor Cyan
     Expand-Archive -Path $zipPath -DestinationPath $InstallPath -Force
     Remove-Item $zipPath
-    Write-Host "   ✅ 압축 해제 완료" -ForegroundColor Green
-    
+    Write-Host "   [OK] Extracted" -ForegroundColor Green
+
 } catch {
-    Write-Host "   ⚠️  릴리스 다운로드 실패: $_" -ForegroundColor Yellow
-    Write-Host "   소스에서 설치를 시도합니다..." -ForegroundColor Yellow
-    
-    # Git clone 대체 방법
+    Write-Host "   [!]  Release download failed: $_" -ForegroundColor Yellow
+    Write-Host "       Falling back to source install..." -ForegroundColor Yellow
+
     Write-Host ""
-    Write-Host "🔧 소스에서 설치 중..." -ForegroundColor Cyan
-    
-    $repoZip = "https://github.com/$repo/archive/refs/heads/main.zip"
+    Write-Host "Installing from source..." -ForegroundColor Cyan
+
+    $repoZip = "https://github.com/$repo/archive/refs/heads/master.zip"
     $zipPath = Join-Path $env:TEMP "pbi-mcp-bridge-source.zip"
-    
+
     try {
         Invoke-WebRequest -Uri $repoZip -OutFile $zipPath -UseBasicParsing
         Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
-        
-        $sourcePath = Join-Path $env:TEMP "copilot-powerbi-desktop-mcp-bridge-main"
+
+        $sourcePath = Join-Path $env:TEMP "copilot-powerbi-desktop-mcp-bridge-master"
         Copy-Item -Path "$sourcePath\*" -Destination $InstallPath -Recurse -Force
-        
+
         Remove-Item $zipPath
         Remove-Item $sourcePath -Recurse -Force
-        
-        # npm install 및 빌드
-        Write-Host "   의존성 설치 중..." -ForegroundColor Cyan
+
+        Write-Host "   Installing dependencies..." -ForegroundColor Cyan
         Push-Location $InstallPath
         npm install --production 2>&1 | Out-Null
-        
-        Write-Host "   빌드 중..." -ForegroundColor Cyan
+
+        Write-Host "   Building..." -ForegroundColor Cyan
         npm run build 2>&1 | Out-Null
         Pop-Location
-        
-        Write-Host "   ✅ 소스 설치 완료" -ForegroundColor Green
+
+        Write-Host "   [OK] Source install complete" -ForegroundColor Green
     } catch {
-        Write-Host "   ❌ 소스 설치 실패: $_" -ForegroundColor Red
+        Write-Host "   [X] Source install failed: $_" -ForegroundColor Red
         exit 1
     }
 }
 
-# config.example.yaml을 config.yaml로 복사
+# Copy config.example.yaml -> config.yaml
 Write-Host ""
-Write-Host "⚙️  설정 파일 생성 중..." -ForegroundColor Cyan
+Write-Host "Creating config file..." -ForegroundColor Cyan
 $configExample = Join-Path $InstallPath "config.example.yaml"
 $config = Join-Path $InstallPath "config.yaml"
 
 if (Test-Path $configExample) {
     if (-not (Test-Path $config)) {
         Copy-Item $configExample $config
-        Write-Host "   ✅ config.yaml 생성 완료" -ForegroundColor Green
-        Write-Host "   필요시 $config 파일을 수정하세요." -ForegroundColor Gray
+        Write-Host "   [OK] config.yaml created" -ForegroundColor Green
+        Write-Host "       Edit $config if needed." -ForegroundColor Gray
     } else {
-        Write-Host "   ℹ️  config.yaml이 이미 존재합니다 (덮어쓰지 않음)" -ForegroundColor Yellow
+        Write-Host "   [i] config.yaml already exists (kept)" -ForegroundColor Yellow
     }
 }
 
-# 바탕화면 바로가기 생성 (선택적)
+# Optional desktop shortcut
 if ($CreateDesktopShortcut) {
     Write-Host ""
-    Write-Host "🔗 바탕화면 바로가기 생성 중..." -ForegroundColor Cyan
-    
+    Write-Host "Creating desktop shortcut..." -ForegroundColor Cyan
+
     $desktopPath = [Environment]::GetFolderPath("Desktop")
     $shortcutPath = Join-Path $desktopPath "Power BI MCP Bridge.lnk"
     $targetPath = Join-Path $InstallPath "scripts\start.ps1"
-    
+
     try {
         $WshShell = New-Object -ComObject WScript.Shell
         $Shortcut = $WshShell.CreateShortcut($shortcutPath)
@@ -192,29 +188,29 @@ if ($CreateDesktopShortcut) {
         $Shortcut.Arguments = "-NoExit -ExecutionPolicy Bypass -File `"$targetPath`""
         $Shortcut.WorkingDirectory = $InstallPath
         $Shortcut.IconLocation = "powershell.exe,0"
-        $Shortcut.Description = "Power BI MCP Bridge 시작"
+        $Shortcut.Description = "Start Power BI MCP Bridge"
         $Shortcut.Save()
-        Write-Host "   ✅ 바로가기 생성: $shortcutPath" -ForegroundColor Green
+        Write-Host "   [OK] Shortcut: $shortcutPath" -ForegroundColor Green
     } catch {
-        Write-Host "   ⚠️  바로가기 생성 실패: $_" -ForegroundColor Yellow
+        Write-Host "   [!]  Failed to create shortcut: $_" -ForegroundColor Yellow
     }
 }
 
-# 완료 메시지
+# Summary
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
-Write-Host "  ✅ 설치 완료!" -ForegroundColor Green
+Write-Host "  Install complete" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "다음 단계:" -ForegroundColor Cyan
-Write-Host "  1. Power BI Desktop을 실행하세요" -ForegroundColor White
-Write-Host "  2. 다음 명령으로 Bridge를 시작하세요:" -ForegroundColor White
+Write-Host "Next steps:" -ForegroundColor Cyan
+Write-Host "  1. Launch Power BI Desktop and open a .pbix file" -ForegroundColor White
+Write-Host "  2. Start the Bridge:" -ForegroundColor White
 Write-Host "     cd $InstallPath" -ForegroundColor Gray
 Write-Host "     .\scripts\start.ps1" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  또는 바탕화면의 바로가기를 실행하세요 (생성한 경우)" -ForegroundColor White
+Write-Host "  Or use the desktop shortcut (if created)" -ForegroundColor White
 Write-Host ""
-Write-Host "  3. 브라우저에서 http://localhost:5050/health 접속하여 확인" -ForegroundColor White
+Write-Host "  3. Open http://localhost:5050/health to confirm" -ForegroundColor White
 Write-Host ""
-Write-Host "문제 발생 시: $InstallPath\README.md 참고" -ForegroundColor Gray
+Write-Host "If anything fails, see $InstallPath\README.md" -ForegroundColor Gray
 Write-Host ""

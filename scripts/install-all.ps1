@@ -1,40 +1,40 @@
 <#
 .SYNOPSIS
-    Power BI MCP Bridge - 사전 요구사항 + 본체 통합 설치 스크립트
+    Power BI MCP Bridge - prerequisites + bridge installer.
 
 .DESCRIPTION
-    비IT 전문가도 안전하게 사용할 수 있도록 다음 4가지를 순서대로 점검/설치합니다.
+    Checks and installs four components in order:
 
       1) Power BI Desktop          - winget Microsoft.PowerBI
-      2) On-premises Data Gateway  - 공식 인스톨러 다운로드 + GUI 마법사
-      3) powerbi-modeling-mcp      - VS Code Marketplace VSIX 추출
-      4) Bridge 본체               - 기존 install.ps1 호출 (선택)
+      2) On-premises Data Gateway  - official installer download + GUI wizard
+      3) powerbi-modeling-mcp      - VS Code Marketplace VSIX extraction
+      4) Bridge itself             - run-in-place or fall back to install.ps1
 
-    보안 원칙:
-      - TLS 1.2+ 강제
-      - 공식 Microsoft / VS Code Marketplace URL만 사용
-      - 다운로드 파일은 Authenticode 디지털 서명 검증 후에만 실행
-      - winget 우선 사용 (서명/검증된 패키지)
-      - 모든 단계는 사용자 확인 후 진행 (-NonInteractive 시 자동 Y)
-      - 모든 작업은 로그 파일에 기록 (사후 검증 가능)
+    Security model:
+      - TLS 1.2+ enforced
+      - Only official Microsoft / VS Code Marketplace URLs are used
+      - Downloaded installers are verified via Authenticode signature before execution
+      - winget preferred (signed and verified packages)
+      - Each step asks for confirmation (-NonInteractive bypasses prompts)
+      - All actions are written to a log file for post-mortem review
 
 .PARAMETER InstallPath
-    Bridge 설치 경로 (기본: C:\pbi-mcp-bridge)
+    Bridge install path (default: C:\pbi-mcp-bridge)
 
 .PARAMETER NonInteractive
-    모든 프롬프트를 자동 [Y]로 응답. CI 또는 사일런트 설치용.
+    Auto-answer Y to all prompts. Use for CI or silent installs.
 
 .PARAMETER SkipPowerBIDesktop
-    Power BI Desktop 단계 건너뛰기
+    Skip the Power BI Desktop step.
 
 .PARAMETER SkipGateway
-    On-premises Data Gateway 단계 건너뛰기
+    Skip the On-premises Data Gateway step.
 
 .PARAMETER SkipMcp
-    powerbi-modeling-mcp 단계 건너뛰기
+    Skip the powerbi-modeling-mcp step.
 
 .PARAMETER SkipBridge
-    Bridge 본체 단계 건너뛰기 (사전 요구사항만 점검)
+    Skip the Bridge step (only check prerequisites).
 
 .EXAMPLE
     .\install-all.ps1
@@ -56,18 +56,18 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 # ============================================================================
-# 글로벌 상태
+# Global state
 # ============================================================================
 $script:LogFile = Join-Path $env:TEMP ("pbi-mcp-bridge-install-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $script:StepTotal = 4
 $script:MicrosoftIssuerHints = @('Microsoft Corporation', 'Microsoft Code Signing')
 
-# 보안: TLS 1.2+ 강제 (구버전 Windows 호환을 위해 OR 연산)
+# Force TLS 1.2+ (older Windows may default to 1.0/1.1)
 [Net.ServicePointManager]::SecurityProtocol =
     [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # ============================================================================
-# 출력/로깅 헬퍼
+# Output / logging helpers
 # ============================================================================
 function Write-Log {
     param([string]$Message, [string]$Level = 'INFO')
@@ -106,7 +106,7 @@ function Read-YesNo {
 }
 
 # ============================================================================
-# 환경/보안 헬퍼
+# Environment / security helpers
 # ============================================================================
 function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -115,7 +115,7 @@ function Test-IsAdmin {
 }
 
 function Invoke-Elevate {
-    # 자기 자신을 관리자 권한으로 재실행하고 현재 프로세스는 종료
+    # Re-launch the current script with admin rights and exit the unprivileged process
     $argList = @(
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
@@ -130,36 +130,36 @@ function Invoke-Elevate {
             $argList += "`"$v`""
         }
     }
-    Write-Info "재실행: powershell.exe $($argList -join ' ')"
+    Write-Info "Re-launching: powershell.exe $($argList -join ' ')"
     Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs | Out-Null
     exit 0
 }
 
 function Test-Authenticode {
     <#
-    파일이 Microsoft에 의해 디지털 서명되었는지 확인.
-    Status가 Valid이고, 서명자 인증서 주체에 Microsoft가 포함되어야 통과.
-    URL 변경에도 안전 (URL 신뢰가 아닌 서명 신뢰 기반).
+    Verify a file is digitally signed by Microsoft.
+    Returns true only if Status is Valid and the signer subject matches a known Microsoft hint.
+    Robust against URL changes (trust is rooted in the signature, not the URL).
     #>
     param([string]$FilePath)
     if (-not (Test-Path $FilePath)) { return $false }
     $sig = Get-AuthenticodeSignature -FilePath $FilePath
     Write-Log ("Authenticode: status={0}, subject='{1}'" -f $sig.Status, $sig.SignerCertificate.Subject) 'SIGN'
     if ($sig.Status -ne 'Valid') {
-        Write-Warn "디지털 서명 상태가 Valid가 아님: $($sig.Status)"
+        Write-Warn "Signature status is not Valid: $($sig.Status)"
         return $false
     }
     $subject = $sig.SignerCertificate.Subject
     foreach ($hint in $script:MicrosoftIssuerHints) {
         if ($subject -match [Regex]::Escape($hint)) { return $true }
     }
-    Write-Warn "서명자가 Microsoft가 아닌 것으로 보임: $subject"
+    Write-Warn "Signer does not appear to be Microsoft: $subject"
     return $false
 }
 
 function Invoke-WebDownload {
     param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$OutFile)
-    Write-Info "다운로드: $Url"
+    Write-Info "Downloading: $Url"
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $oldPref = $ProgressPreference
     try {
@@ -169,9 +169,9 @@ function Invoke-WebDownload {
         $ProgressPreference = $oldPref
     }
     $sw.Stop()
-    if (-not (Test-Path $OutFile)) { throw "다운로드 실패: 파일이 생성되지 않음" }
+    if (-not (Test-Path $OutFile)) { throw "Download failed: file was not created" }
     $size = (Get-Item $OutFile).Length / 1MB
-    Write-Info ("저장: {0:N1} MB ({1:N1}s)" -f $size, $sw.Elapsed.TotalSeconds)
+    Write-Info ("Saved: {0:N1} MB ({1:N1}s)" -f $size, $sw.Elapsed.TotalSeconds)
 }
 
 function Test-Winget {
@@ -185,9 +185,9 @@ function Invoke-Winget {
         --accept-package-agreements --accept-source-agreements 2>&1
     $code = $LASTEXITCODE
     Write-Log ("winget exit=$code output=$($output | Out-String)") 'WINGET'
-    # winget exit codes: 0 = success, 0x8A150006 = no applicable upgrade (이미 최신)
+    # winget exit codes: 0 = success, 0x8A150006 = no applicable upgrade (already up-to-date)
     if ($code -ne 0 -and $code -ne 0x8A150006) {
-        throw "winget 설치 실패 ($Name): exit $code"
+        throw "winget install failed ($Name): exit $code"
     }
 }
 
@@ -204,7 +204,7 @@ function Test-PowerBIDesktop {
             return [PSCustomObject]@{ Found = $true; Path = $p; Source = 'MSI' }
         }
     }
-    # Microsoft Store 버전
+    # Microsoft Store version
     try {
         $appx = Get-AppxPackage -Name 'Microsoft.MicrosoftPowerBIDesktop' -ErrorAction SilentlyContinue
         if ($appx) {
@@ -216,12 +216,12 @@ function Test-PowerBIDesktop {
 
 function Install-PowerBIDesktop {
     if (-not (Test-Winget)) {
-        Write-Warn "winget이 설치되어 있지 않습니다. 수동 설치가 필요합니다."
-        Write-Host "    공식 다운로드: https://powerbi.microsoft.com/desktop/" -ForegroundColor White
-        if (Read-YesNo "다운로드 페이지를 브라우저에서 여시겠습니까?" 'Y') {
+        Write-Warn "winget is not installed. Manual install required."
+        Write-Host "    Official download: https://powerbi.microsoft.com/desktop/" -ForegroundColor White
+        if (Read-YesNo "Open the download page in a browser?" 'Y') {
             Start-Process 'https://powerbi.microsoft.com/desktop/'
         }
-        throw "Power BI Desktop 자동 설치 불가 (winget 미설치)"
+        throw "Cannot auto-install Power BI Desktop (winget unavailable)"
     }
     Invoke-Winget -Id 'Microsoft.PowerBI' -Name 'Power BI Desktop'
 }
@@ -230,21 +230,21 @@ function Step-PowerBIDesktop {
     Write-Step 1 "Power BI Desktop"
     $r = Test-PowerBIDesktop
     if ($r.Found) {
-        Write-Ok ("이미 설치됨: {0}  [{1}]" -f $r.Path, $r.Source)
+        Write-Ok ("Already installed: {0}  [{1}]" -f $r.Path, $r.Source)
         return
     }
-    Write-Warn "Power BI Desktop이 설치되어 있지 않습니다."
-    Write-Host "    Bridge가 데이터를 읽으려면 Power BI Desktop이 필요합니다." -ForegroundColor Gray
-    if (-not (Read-YesNo "지금 설치하시겠습니까? (winget, 약 2~5분)" 'Y')) {
-        Write-Warn "Power BI Desktop 설치를 건너뜁니다. 나중에 직접 설치해야 합니다."
+    Write-Warn "Power BI Desktop is not installed."
+    Write-Host "    The Bridge needs Power BI Desktop to read data from a .pbix model." -ForegroundColor Gray
+    if (-not (Read-YesNo "Install now? (winget, ~2-5 min)" 'Y')) {
+        Write-Warn "Skipping Power BI Desktop. Install it manually before using the Bridge."
         return
     }
     Install-PowerBIDesktop
     $r2 = Test-PowerBIDesktop
     if ($r2.Found) {
-        Write-Ok "설치 완료: $($r2.Path)"
+        Write-Ok "Install complete: $($r2.Path)"
     } else {
-        Write-Warn "설치 직후 검증 실패. winget 출력을 로그에서 확인하세요."
+        Write-Warn "Post-install check failed. See winget output in the log."
     }
 }
 
@@ -252,7 +252,7 @@ function Step-PowerBIDesktop {
 # [2] On-premises Data Gateway
 # ============================================================================
 function Test-DataGateway {
-    # 표준 모드와 개인 모드의 서비스 이름이 다를 수 있어 모두 확인
+    # Service name varies between Standard mode and Personal mode; check all known names
     $svcCandidates = @('PBIEgwService', 'OnPremisesDataGatewayService', 'PowerBIPersonalGateway')
     foreach ($n in $svcCandidates) {
         $svc = Get-Service -Name $n -ErrorAction SilentlyContinue
@@ -269,8 +269,8 @@ function Test-DataGateway {
 }
 
 function Install-DataGateway {
-    # 공식 Microsoft Download Center 인스톨러.
-    # URL 변경에 대비해 Authenticode 서명 검증으로 무결성 보장.
+    # Official Microsoft Download Center installer.
+    # Resilient to URL changes because we verify the Authenticode signature after download.
     $urls = @(
         'https://aka.ms/OnPremisesDataGatewayStandardInstaller',
         'https://download.microsoft.com/download/D/A/1/DA1FDDB8-6DA8-4F50-B4D0-18019591E182/GatewayInstall.exe'
@@ -284,35 +284,35 @@ function Install-DataGateway {
             $downloaded = $true
             break
         } catch {
-            Write-Warn "다운로드 실패 ($u): $_"
+            Write-Warn "Download failed ($u): $_"
         }
     }
     if (-not $downloaded) {
-        Write-Host "    수동 다운로드: https://powerbi.microsoft.com/gateway/" -ForegroundColor White
-        if (Read-YesNo "다운로드 페이지를 브라우저에서 여시겠습니까?" 'Y') {
+        Write-Host "    Manual download: https://powerbi.microsoft.com/gateway/" -ForegroundColor White
+        if (Read-YesNo "Open the download page in a browser?" 'Y') {
             Start-Process 'https://powerbi.microsoft.com/gateway/'
         }
-        throw "Gateway 자동 다운로드 실패"
+        throw "Gateway auto-download failed"
     }
 
     if (-not (Test-Authenticode -FilePath $tmp)) {
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-        throw "Gateway 인스톨러의 Microsoft 디지털 서명 검증 실패. 보안상 중단합니다."
+        throw "Gateway installer failed Microsoft Authenticode signature check. Aborting for security."
     }
-    Write-Ok "디지털 서명 검증 통과 (Microsoft Corporation)"
+    Write-Ok "Signature verified (Microsoft Corporation)"
 
     Write-Host ""
     Write-Host "    -----------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "    Gateway 설치 마법사가 실행됩니다." -ForegroundColor Yellow
-    Write-Host "    1) 약관 동의 후 [설치]" -ForegroundColor White
-    Write-Host "    2) Microsoft 계정으로 로그인 (Power BI 라이선스 보유 계정)" -ForegroundColor White
-    Write-Host "    3) [이 컴퓨터에 새 게이트웨이 등록] 선택" -ForegroundColor White
-    Write-Host "    4) Gateway 이름 지정 + 복구 키 설정/백업" -ForegroundColor White
+    Write-Host "    The Gateway install wizard will launch now." -ForegroundColor Yellow
+    Write-Host "    1) Accept the license and click [Install]" -ForegroundColor White
+    Write-Host "    2) Sign in with a Microsoft account that has a Power BI license" -ForegroundColor White
+    Write-Host "    3) Select [Register a new gateway on this computer]" -ForegroundColor White
+    Write-Host "    4) Pick a gateway name + back up the recovery key" -ForegroundColor White
     Write-Host "    -----------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
-    if (-not (Read-YesNo "준비되셨으면 마법사를 시작합니다." 'Y')) {
+    if (-not (Read-YesNo "Ready to launch the wizard?" 'Y')) {
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-        Write-Warn "사용자가 Gateway 설치를 취소함"
+        Write-Warn "User cancelled Gateway install"
         return
     }
     Start-Process -FilePath $tmp -Wait
@@ -324,28 +324,28 @@ function Step-DataGateway {
     $r = Test-DataGateway
     if ($r.Found) {
         if ($r.Service) {
-            Write-Ok ("이미 설치됨: 서비스 '{0}' (상태 {1})" -f $r.Service, $r.Status)
+            Write-Ok ("Already installed: service '{0}' (status {1})" -f $r.Service, $r.Status)
         } else {
-            Write-Ok ("이미 설치됨: $($r.Path)")
+            Write-Ok ("Already installed: $($r.Path)")
         }
         return
     }
-    Write-Warn "On-premises Data Gateway가 설치되어 있지 않습니다."
-    Write-Host "    이 게이트웨이는 Copilot Studio가 로컬 PC의 Bridge로" -ForegroundColor Gray
-    Write-Host "    안전하게 연결되도록 하는 Microsoft 공식 컴포넌트입니다." -ForegroundColor Gray
-    Write-Host "    설치 후 Microsoft 계정 로그인 + 게이트웨이 등록이 필요합니다." -ForegroundColor Gray
-    if (-not (Read-YesNo "지금 다운로드 후 설치 마법사를 실행하시겠습니까?" 'Y')) {
-        Write-Warn "Gateway 설치를 건너뜁니다. Copilot 연결 시 필요합니다."
+    Write-Warn "On-premises Data Gateway is not installed."
+    Write-Host "    This gateway is the official Microsoft component that lets" -ForegroundColor Gray
+    Write-Host "    Copilot Studio reach the local Bridge securely." -ForegroundColor Gray
+    Write-Host "    After install you must sign in and register the gateway." -ForegroundColor Gray
+    if (-not (Read-YesNo "Download now and launch the install wizard?" 'Y')) {
+        Write-Warn "Skipping Gateway. It is required when wiring up Copilot Studio."
         return
     }
     Install-DataGateway
     $r2 = Test-DataGateway
-    if ($r2.Found) { Write-Ok "Gateway 설치 확인 완료" }
-    else { Write-Warn "설치 직후 서비스 미감지. 마법사를 끝까지 진행했는지 확인하세요." }
+    if ($r2.Found) { Write-Ok "Gateway install verified" }
+    else { Write-Warn "Service not detected post-install. Did the wizard complete?" }
 }
 
 # ============================================================================
-# [3] powerbi-modeling-mcp (MCP 서버)
+# [3] powerbi-modeling-mcp (MCP server)
 # ============================================================================
 function Test-PowerBIMcp {
     $vscodeDirs = @(
@@ -368,8 +368,8 @@ function Test-PowerBIMcp {
 }
 
 function Install-PowerBIMcp {
-    # VS Code Marketplace의 공식 VSIX 패키지 (= ZIP 형식).
-    # ~/.vscode/extensions에 추출하면 Bridge의 mcp-discovery가 자동 인식.
+    # Official VS Code Marketplace VSIX (which is a ZIP).
+    # Extracting into ~/.vscode/extensions makes it discoverable by the Bridge's mcp-discovery.
     $vsixUrl = 'https://marketplace.visualstudio.com/_apis/public/gallery/publishers/analysis-services/vsextensions/powerbi-modeling-mcp/latest/vspackage?targetPlatform=win32-x64'
     $vsixTmp = Join-Path $env:TEMP 'powerbi-modeling-mcp.vsix'
     $extractRoot = Join-Path $env:TEMP ("pbi-mcp-extract-" + [Guid]::NewGuid().ToString('N'))
@@ -378,7 +378,7 @@ function Install-PowerBIMcp {
 
     if ((Get-Item $vsixTmp).Length -lt 100KB) {
         Remove-Item $vsixTmp -Force -ErrorAction SilentlyContinue
-        throw "VSIX 다운로드 결과가 너무 작습니다. URL이 변경되었을 수 있습니다."
+        throw "VSIX download too small. The URL may have changed."
     }
 
     New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
@@ -387,10 +387,10 @@ function Install-PowerBIMcp {
     $extensionRoot = Join-Path $extractRoot 'extension'
     if (-not (Test-Path $extensionRoot)) {
         Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
-        throw "VSIX 구조 비정상: 'extension' 폴더가 없습니다."
+        throw "VSIX layout unexpected: missing 'extension' folder"
     }
 
-    # package.json에서 버전 추출 (폴더명에 사용하면 Bridge 자동 탐색이 최신 우선 정렬 가능)
+    # Pull version from package.json so the folder name lets Bridge auto-discovery sort by latest
     $version = '0.0.0'
     $pkgJsonPath = Join-Path $extensionRoot 'package.json'
     if (Test-Path $pkgJsonPath) {
@@ -398,31 +398,31 @@ function Install-PowerBIMcp {
             $pkg = Get-Content $pkgJsonPath -Raw | ConvertFrom-Json
             if ($pkg.version) { $version = $pkg.version }
         } catch {
-            Write-Warn "package.json 파싱 실패. 기본 버전 사용: $version"
+            Write-Warn "Failed to parse package.json; using default version $version"
         }
     }
 
-    # MCP 실행파일 서명 확인 (정보성 — VS Code Marketplace 출처 자체가 신뢰 경로)
+    # Informational signature check (trust path is the Marketplace itself)
     $mcpExe = Join-Path $extensionRoot 'server\powerbi-modeling-mcp.exe'
     if (-not (Test-Path $mcpExe)) {
         Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
-        throw "VSIX에서 MCP 실행파일을 찾지 못함: server\powerbi-modeling-mcp.exe"
+        throw "MCP executable not found in VSIX: server\powerbi-modeling-mcp.exe"
     }
     $sig = Get-AuthenticodeSignature -FilePath $mcpExe
     if ($sig.Status -eq 'Valid') {
-        Write-Ok "MCP 실행파일 서명 확인: $($sig.SignerCertificate.Subject)"
+        Write-Ok "MCP exe signature: $($sig.SignerCertificate.Subject)"
     } else {
-        Write-Warn "MCP 실행파일 미서명 또는 미검증 (status=$($sig.Status)). VS Code Marketplace 출처이므로 진행합니다."
+        Write-Warn "MCP exe is unsigned or unverified (status=$($sig.Status)). Proceeding because source is the VS Code Marketplace."
     }
 
-    # ~/.vscode/extensions/analysis-services.powerbi-modeling-mcp-{version}로 이동
+    # Move into ~/.vscode/extensions/analysis-services.powerbi-modeling-mcp-{version}
     $targetParent = Join-Path $env:USERPROFILE '.vscode\extensions'
     $targetDir = Join-Path $targetParent ("analysis-services.powerbi-modeling-mcp-$version")
     if (-not (Test-Path $targetParent)) {
         New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
     }
     if (Test-Path $targetDir) {
-        Write-Info "기존 설치 갱신: $targetDir"
+        Write-Info "Replacing existing installation: $targetDir"
         Remove-Item $targetDir -Recurse -Force
     }
     Move-Item -Path $extensionRoot -Destination $targetDir -Force
@@ -430,32 +430,32 @@ function Install-PowerBIMcp {
     Remove-Item $vsixTmp -Force -ErrorAction SilentlyContinue
     Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-    Write-Ok "설치 위치: $targetDir"
+    Write-Ok "Installed at: $targetDir"
 }
 
 function Step-PowerBIMcp {
-    Write-Step 3 "powerbi-modeling-mcp (MCP 서버)"
+    Write-Step 3 "powerbi-modeling-mcp (MCP server)"
     $r = Test-PowerBIMcp
     if ($r.Found) {
-        Write-Ok ("이미 설치됨: $($r.Path)")
-        Write-Info "버전 폴더: $($r.Source)"
+        Write-Ok ("Already installed: $($r.Path)")
+        Write-Info "Version folder: $($r.Source)"
         return
     }
-    Write-Warn "powerbi-modeling-mcp가 설치되어 있지 않습니다."
-    Write-Host "    VS Code Marketplace의 공식 패키지" -ForegroundColor Gray
-    Write-Host "    (analysis-services.powerbi-modeling-mcp)를 다운로드합니다." -ForegroundColor Gray
-    if (-not (Read-YesNo "지금 설치하시겠습니까? (약 30~60초)" 'Y')) {
-        Write-Warn "MCP 설치를 건너뜁니다. Bridge 시작 시 자동 다운로드를 시도합니다."
+    Write-Warn "powerbi-modeling-mcp is not installed."
+    Write-Host "    Will download the official package from the VS Code Marketplace" -ForegroundColor Gray
+    Write-Host "    (analysis-services.powerbi-modeling-mcp)." -ForegroundColor Gray
+    if (-not (Read-YesNo "Install now? (~30-60 sec)" 'Y')) {
+        Write-Warn "Skipping MCP install. The Bridge will try to auto-download it on startup."
         return
     }
     Install-PowerBIMcp
     $r2 = Test-PowerBIMcp
-    if ($r2.Found) { Write-Ok "검증 완료: $($r2.Path)" }
-    else { throw "설치 직후 MCP 실행파일 검증 실패" }
+    if ($r2.Found) { Write-Ok "Verified: $($r2.Path)" }
+    else { throw "MCP exe not found after install" }
 }
 
 # ============================================================================
-# [4] Bridge 본체
+# [4] Bridge itself
 # ============================================================================
 function New-DesktopShortcut {
     param([Parameter(Mandatory)][string]$ProjectRoot)
@@ -463,7 +463,7 @@ function New-DesktopShortcut {
     $shortcutPath = Join-Path $desktop 'Power BI MCP Bridge.lnk'
     $startScript = Join-Path $ProjectRoot 'scripts\start.ps1'
     if (-not (Test-Path $startScript)) {
-        Write-Warn "start.ps1 없음 - 바로가기 생성 건너뜀: $startScript"
+        Write-Warn "start.ps1 missing - skipping shortcut: $startScript"
         return
     }
     try {
@@ -473,18 +473,18 @@ function New-DesktopShortcut {
         $sc.Arguments = "-NoExit -ExecutionPolicy Bypass -File `"$startScript`""
         $sc.WorkingDirectory = $ProjectRoot
         $sc.IconLocation = 'powershell.exe,0'
-        $sc.Description = 'Power BI MCP Bridge 시작'
+        $sc.Description = 'Start Power BI MCP Bridge'
         $sc.Save()
-        Write-Ok "바탕화면 바로가기: $shortcutPath"
+        Write-Ok "Desktop shortcut: $shortcutPath"
     } catch {
-        Write-Warn "바로가기 생성 실패: $_"
+        Write-Warn "Shortcut creation failed: $_"
     }
 }
 
 function Initialize-LocalBridge {
     <#
-    배포 zip을 그 자리에서 사용 (run-in-place).
-    config.yaml 생성 + 선택적으로 바탕화면 바로가기.
+    Run-in-place setup for the extracted release zip.
+    Creates config.yaml from the example and (optionally) a desktop shortcut.
     #>
     param([Parameter(Mandatory)][string]$ProjectRoot)
 
@@ -492,159 +492,159 @@ function Initialize-LocalBridge {
     $config        = Join-Path $ProjectRoot 'config.yaml'
     if (-not (Test-Path $config) -and (Test-Path $configExample)) {
         Copy-Item $configExample $config
-        Write-Ok "config.yaml 생성: $config"
+        Write-Ok "Created config.yaml: $config"
     } elseif (Test-Path $config) {
-        Write-Info "기존 config.yaml 보존: $config"
+        Write-Info "Keeping existing config.yaml: $config"
     }
 
-    # filesystem 도구 샌드박스 폴더 자동 생성 (config의 allowedPaths가 비어있어도
-    # Bridge 시작 시 같은 위치를 만들지만, 사용자에게 폴더 위치를 미리 보여주기 위함).
+    # Create the filesystem-tools sandbox folder up front so the user can see where it lives.
+    # The Bridge would create it on startup anyway when allowedPaths is empty.
     $workspace = Join-Path $ProjectRoot 'workspace'
     if (-not (Test-Path $workspace)) {
         New-Item -ItemType Directory -Path $workspace -Force | Out-Null
-        Write-Ok "filesystem 샌드박스 생성: $workspace"
+        Write-Ok "Created filesystem sandbox: $workspace"
     } else {
-        Write-Info "filesystem 샌드박스 존재: $workspace"
+        Write-Info "Filesystem sandbox exists: $workspace"
     }
 
-    if (Read-YesNo "바탕화면에 시작 바로가기를 만들까요?" 'Y') {
+    if (Read-YesNo "Create a desktop shortcut?" 'Y') {
         New-DesktopShortcut -ProjectRoot $ProjectRoot
     }
 
     Write-Host ""
-    Write-Host "    Bridge 위치: $ProjectRoot" -ForegroundColor Gray
-    Write-Host "    시작:        .\scripts\start.ps1" -ForegroundColor Gray
+    Write-Host "    Bridge location: $ProjectRoot" -ForegroundColor Gray
+    Write-Host "    Start command  : .\scripts\start.ps1" -ForegroundColor Gray
 }
 
 function Step-Bridge {
-    Write-Step 4 "Power BI MCP Bridge (본체)"
+    Write-Step 4 "Power BI MCP Bridge"
 
-    # install-all.ps1은 scripts\ 안에 있으므로 한 단계 위가 프로젝트 루트
+    # install-all.ps1 lives in scripts\, so the project root is one level up
     $projectRoot = Split-Path $PSScriptRoot -Parent
 
-    # === 1순위: 배포 zip 레이아웃 — 루트에 사전 빌드 .exe ===
+    # Priority 1: release zip layout - .exe at the root
     $localExeRoot = Join-Path $projectRoot 'pbi-mcp-bridge.exe'
     if (Test-Path $localExeRoot) {
-        Write-Ok "사전 빌드 .exe 발견: $localExeRoot"
-        Write-Info "Node.js 불필요. 현재 폴더를 설치 위치로 사용합니다."
+        Write-Ok "Pre-built .exe found: $localExeRoot"
+        Write-Info "Node.js not required. Using the current folder as the install location."
         Initialize-LocalBridge -ProjectRoot $projectRoot
         return
     }
 
-    # === 2순위: 개발 레이아웃 — release\ 안에 사전 빌드 .exe ===
+    # Priority 2: dev layout - .exe under release\
     $localExeSub = Join-Path $projectRoot 'release\pbi-mcp-bridge.exe'
     if (Test-Path $localExeSub) {
-        Write-Info "release\pbi-mcp-bridge.exe 발견. 프로젝트 루트로 복사합니다 (start.ps1 호환)"
+        Write-Info "Found release\pbi-mcp-bridge.exe; copying to project root for start.ps1 compatibility"
         Copy-Item $localExeSub $localExeRoot -Force
-        Write-Ok "복사 완료: $localExeRoot"
+        Write-Ok "Copied to: $localExeRoot"
         Initialize-LocalBridge -ProjectRoot $projectRoot
         return
     }
 
-    # === 3순위: 소스 빌드 결과물 — dist\index.js (Node.js 필요) ===
+    # Priority 3: source build artifact - dist\index.js (Node.js required)
     if (Test-Path (Join-Path $projectRoot 'dist\index.js')) {
-        Write-Warn "사전 빌드 .exe 없음. dist\index.js 사용 - Node.js 런타임 필요"
+        Write-Warn "No pre-built .exe. Will use dist\index.js, which needs the Node.js runtime."
         if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-            Write-Warn "Node.js가 설치되어 있지 않습니다. dist\index.js를 실행하려면 Node.js 20+가 필요합니다."
+            Write-Warn "Node.js is not installed. dist\index.js requires Node.js 20+."
         }
         Initialize-LocalBridge -ProjectRoot $projectRoot
         return
     }
 
-    # === 4순위: 폴백 — 기존 install.ps1 (원격 다운로드 또는 소스 빌드) ===
-    Write-Info "로컬 빌드 결과물 없음. 원격 설치(install.ps1)로 폴백합니다."
+    # Priority 4: fall back to existing install.ps1 (remote download / source build)
+    Write-Info "No local build artifacts. Falling back to install.ps1 (remote install)."
     $existingInstaller = Join-Path $PSScriptRoot 'install.ps1'
     if (-not (Test-Path $existingInstaller)) {
-        Write-Warn "install.ps1 없음 ($existingInstaller). Bridge 단계 건너뜀."
+        Write-Warn "install.ps1 not found ($existingInstaller). Skipping Bridge step."
         return
     }
     & $existingInstaller -InstallPath $InstallPath -CreateDesktopShortcut
 }
 
 # ============================================================================
-# 메인
+# Main
 # ============================================================================
 Write-Host ""
 Write-Host "=========================================================" -ForegroundColor Cyan
-Write-Host "  Power BI MCP Bridge - 통합 설치 마법사" -ForegroundColor Cyan
+Write-Host "  Power BI MCP Bridge - Installer" -ForegroundColor Cyan
 Write-Host "=========================================================" -ForegroundColor Cyan
-Write-Host "  로그: $script:LogFile" -ForegroundColor DarkGray
+Write-Host "  Log: $script:LogFile" -ForegroundColor DarkGray
 Write-Host ""
 Write-Log ("Start: User=$env:USERNAME, OS=$([System.Environment]::OSVersion.VersionString), PSVer=$($PSVersionTable.PSVersion)") 'BOOT'
 
-# 관리자 권한 점검 + 자동 승격
+# Admin check + auto-elevate
 if (-not (Test-IsAdmin)) {
-    Write-Warn "관리자 권한이 필요합니다. UAC 프롬프트로 재실행합니다..."
+    Write-Warn "Administrator rights are required. Re-launching with UAC..."
     Start-Sleep -Seconds 1
     Invoke-Elevate
 }
-Write-Ok "관리자 권한 확인"
+Write-Ok "Administrator rights confirmed"
 
-# Windows 버전
+# Windows version
 $os = [System.Environment]::OSVersion.Version
 if ($os.Major -lt 10) {
-    Write-Err "Windows 10 이상이 필요합니다. (현재: $os)"
+    Write-Err "Windows 10 or later required. Current: $os"
     exit 1
 }
-Write-Ok ("Windows {0}.{1} 확인" -f $os.Major, $os.Minor)
+Write-Ok ("Windows {0}.{1} detected" -f $os.Major, $os.Minor)
 
-# 실행 정책
+# Execution policy
 $ep = Get-ExecutionPolicy -Scope CurrentUser
 if ($ep -eq 'Restricted' -or $ep -eq 'AllSigned') {
-    Write-Warn "현재 실행 정책: $ep"
-    if (Read-YesNo "RemoteSigned로 변경하시겠습니까? (현재 사용자 한정)" 'Y') {
+    Write-Warn "Current execution policy: $ep"
+    if (Read-YesNo "Change to RemoteSigned for the current user?" 'Y') {
         Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
-        Write-Ok "실행 정책 변경 완료"
+        Write-Ok "Execution policy changed"
     }
 }
 
-# 단계 실행
+# Run the steps
 try {
-    if ($SkipPowerBIDesktop) { Write-Step 1 "Power BI Desktop (스킵)" } else { Step-PowerBIDesktop }
-    if ($SkipGateway)        { Write-Step 2 "Gateway (스킵)" }            else { Step-DataGateway }
-    if ($SkipMcp)            { Write-Step 3 "MCP (스킵)" }                else { Step-PowerBIMcp }
-    if ($SkipBridge)         { Write-Step 4 "Bridge (스킵)" }             else { Step-Bridge }
+    if ($SkipPowerBIDesktop) { Write-Step 1 "Power BI Desktop (skipped)" } else { Step-PowerBIDesktop }
+    if ($SkipGateway)        { Write-Step 2 "Gateway (skipped)" }            else { Step-DataGateway }
+    if ($SkipMcp)            { Write-Step 3 "MCP (skipped)" }                else { Step-PowerBIMcp }
+    if ($SkipBridge)         { Write-Step 4 "Bridge (skipped)" }             else { Step-Bridge }
 }
 catch {
     Write-Host ""
-    Write-Err "설치 중 오류: $_"
+    Write-Err "Install error: $_"
     Write-Log ($_ | Out-String) 'FATAL'
-    Write-Host "    상세 로그: $script:LogFile" -ForegroundColor Yellow
+    Write-Host "    Detailed log: $script:LogFile" -ForegroundColor Yellow
     if (-not $NonInteractive) {
         Write-Host ""
-        Read-Host "엔터를 눌러 종료"
+        Read-Host "Press ENTER to exit"
     }
     exit 1
 }
 
-# 완료 안내
+# Completion banner
 Write-Host ""
 Write-Host "=========================================================" -ForegroundColor Green
-Write-Host "  설치 완료!" -ForegroundColor Green
+Write-Host "  Install complete!" -ForegroundColor Green
 Write-Host "=========================================================" -ForegroundColor Green
 Write-Host ""
 $bridgeRoot = Split-Path $PSScriptRoot -Parent
 $samplePbix = Join-Path $bridgeRoot 'samples\BI-sample.pbix'
-Write-Host "다음 단계:" -ForegroundColor Cyan
-Write-Host "  1) Power BI Desktop 실행 후 .pbix 파일을 엽니다"
+Write-Host "Next steps:" -ForegroundColor Cyan
+Write-Host "  1) Launch Power BI Desktop and open a .pbix file"
 if (Test-Path $samplePbix) {
-    Write-Host "       테스트용 샘플: $samplePbix" -ForegroundColor DarkGray
+    Write-Host "       Sample model: $samplePbix" -ForegroundColor DarkGray
 }
-Write-Host "  2) Bridge 시작 (또는 바탕화면 바로가기 더블클릭):" -ForegroundColor White
+Write-Host "  2) Start the Bridge (or double-click the desktop shortcut):" -ForegroundColor White
 Write-Host "       cd `"$bridgeRoot`"" -ForegroundColor DarkGray
 Write-Host "       .\scripts\start.ps1" -ForegroundColor DarkGray
-Write-Host "  3) http://localhost:5050/health 에서 상태 확인"
+Write-Host "  3) Open http://localhost:5050/health to confirm"
 $workspaceHint = Join-Path $bridgeRoot 'workspace'
 if (Test-Path $workspaceHint) {
     Write-Host ""
-    Write-Host "  파일 조작 MCP (filesystem) 샌드박스:" -ForegroundColor Cyan
+    Write-Host "  Filesystem MCP sandbox:" -ForegroundColor Cyan
     Write-Host "    $workspaceHint" -ForegroundColor DarkGray
-    Write-Host "    Copilot Studio가 이 폴더 안에서만 read_file / write_file / list_directory 등을 수행합니다." -ForegroundColor DarkGray
+    Write-Host "    Copilot Studio's read_file / write_file / list_directory operate inside this folder only." -ForegroundColor DarkGray
 }
 Write-Host ""
-Write-Host "  로그: $script:LogFile" -ForegroundColor DarkGray
+Write-Host "  Log: $script:LogFile" -ForegroundColor DarkGray
 Write-Host ""
 
 if (-not $NonInteractive) {
-    Read-Host "엔터를 눌러 종료"
+    Read-Host "Press ENTER to exit"
 }

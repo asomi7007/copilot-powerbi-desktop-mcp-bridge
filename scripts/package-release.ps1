@@ -1,39 +1,40 @@
 <#
 .SYNOPSIS
-    GitHub Releases 배포용 zip 패키지 생성
+    Build the GitHub Releases distribution zip.
 
 .DESCRIPTION
-    pkg로 단일 .exe를 빌드하고, 최종 사용자에게 필요한 파일만 모아 zip으로 압축한다.
-    결과물은 Node.js 없이 동작하며, 사용자는 zip 풀고 Install.bat만 더블클릭하면 된다.
+    Builds a single self-contained .exe with pkg, then stages only the files
+    end users need and packs them into a zip. The result runs without Node.js;
+    end users only have to extract the zip and double-click Install.bat.
 
-    zip 내부 구조 (start.ps1이 루트 .exe를 인식하도록 설계):
+    Zip layout (start.ps1 expects the .exe at the root):
       pbi-mcp-bridge-win-x64-v{ver}/
-        ├── Install.bat               <- 비IT 사용자 진입점
-        ├── pbi-mcp-bridge.exe        <- 사전 빌드 (Node.js 내장)
-        ├── config.example.yaml
-        ├── README.md
-        ├── LICENSE
-        ├── scripts/
-        │     ├── install-all.ps1     <- 사전요구사항 + Bridge 설치
-        │     ├── install.ps1
-        │     ├── start.ps1
-        │     ├── stop.ps1
-        │     ├── setup.ps1
-        │     └── register-startup.ps1
-        ├── connector/
-        │     ├── apiDefinition.swagger.json
-        │     └── apiProperties.json
-        └── samples/
-              └── BI-sample.pbix      <- MCP 테스트용 샘플 모델
+        |- Install.bat               <- double-click entry point
+        |- pbi-mcp-bridge.exe        <- pre-built (Node.js bundled)
+        |- config.example.yaml
+        |- README.md
+        |- LICENSE
+        |- scripts/
+        |    |- install-all.ps1      <- prerequisites + Bridge installer
+        |    |- install.ps1
+        |    |- start.ps1
+        |    |- stop.ps1
+        |    |- setup.ps1
+        |    \- register-startup.ps1
+        |- connector/
+        |    |- apiDefinition.swagger.json
+        |    \- apiProperties.json
+        \- samples/
+             \- BI-sample.pbix       <- MCP smoke-test model
 
 .PARAMETER OutputDir
-    zip 파일 저장 폴더 (기본: 프로젝트 루트의 release\)
+    Folder to write the zip into (default: <project>\release)
 
 .PARAMETER Version
-    릴리스 버전. 미지정 시 package.json의 version 사용.
+    Release version. Defaults to package.json's "version".
 
 .PARAMETER SkipBuild
-    pkg:build 단계 건너뛰기 (이미 release\pbi-mcp-bridge.exe가 있을 때)
+    Skip pkg:build (use the existing release\pbi-mcp-bridge.exe).
 
 .EXAMPLE
     .\scripts\package-release.ps1
@@ -56,11 +57,11 @@ if (-not $OutputDir) { $OutputDir = Join-Path $projectRoot 'release' }
 Push-Location $projectRoot
 try {
     # ----------------------------------------------------------------------
-    # 0. 버전 결정
+    # 0. Determine version
     # ----------------------------------------------------------------------
     if (-not $Version) {
         $pkgPath = Join-Path $projectRoot 'package.json'
-        if (-not (Test-Path $pkgPath)) { throw "package.json 없음: $pkgPath" }
+        if (-not (Test-Path $pkgPath)) { throw "package.json not found: $pkgPath" }
         $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
         $Version = $pkg.version
     }
@@ -73,37 +74,37 @@ try {
     Write-Host ""
 
     # ----------------------------------------------------------------------
-    # 1. pkg 빌드
+    # 1. pkg build
     # ----------------------------------------------------------------------
     $sourceExe = Join-Path $projectRoot 'release\pbi-mcp-bridge.exe'
     if ($SkipBuild) {
-        Write-Host "[1/3] pkg 빌드 SKIP (-SkipBuild)" -ForegroundColor Yellow
+        Write-Host "[1/3] pkg build SKIPPED (-SkipBuild)" -ForegroundColor Yellow
         if (-not (Test-Path $sourceExe)) {
-            throw "기존 빌드 결과물 없음: $sourceExe"
+            throw "No pre-built artifact found at: $sourceExe"
         }
     } else {
-        Write-Host "[1/3] pkg 빌드 실행 (npm run pkg:build)..." -ForegroundColor Cyan
+        Write-Host "[1/3] pkg build (npm run pkg:build)..." -ForegroundColor Cyan
         & npm run pkg:build
-        if ($LASTEXITCODE -ne 0) { throw "npm run pkg:build 실패 (exit $LASTEXITCODE)" }
-        if (-not (Test-Path $sourceExe)) { throw "빌드 결과물 없음: $sourceExe" }
+        if ($LASTEXITCODE -ne 0) { throw "npm run pkg:build failed (exit $LASTEXITCODE)" }
+        if (-not (Test-Path $sourceExe)) { throw "No build artifact at: $sourceExe" }
         Write-Host "    [OK] $sourceExe" -ForegroundColor Green
     }
 
     # ----------------------------------------------------------------------
-    # 2. 스테이징 폴더 구성
+    # 2. Stage release files
     # ----------------------------------------------------------------------
-    Write-Host "[2/3] 배포 파일 스테이징..." -ForegroundColor Cyan
+    Write-Host "[2/3] Staging release files..." -ForegroundColor Cyan
 
     $stageName = "pbi-mcp-bridge-win-x64-v$Version"
     $stageRoot = Join-Path $env:TEMP $stageName
     if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
     New-Item -ItemType Directory -Path $stageRoot | Out-Null
 
-    # zip 루트에 .exe (start.ps1이 이 위치에서 찾음)
+    # .exe goes at the root so start.ps1 can find it without a subfolder
     Copy-Item $sourceExe (Join-Path $stageRoot 'pbi-mcp-bridge.exe') -Force
     Write-Host "    [+] pbi-mcp-bridge.exe" -ForegroundColor Gray
 
-    # 루트 단일 파일들 (있는 것만)
+    # Single root files (only if present)
     $rootFiles = @('Install.bat', 'config.example.yaml', 'README.md', 'LICENSE')
     foreach ($f in $rootFiles) {
         $src = Join-Path $projectRoot $f
@@ -111,11 +112,11 @@ try {
             Copy-Item $src $stageRoot -Force
             Write-Host "    [+] $f" -ForegroundColor Gray
         } else {
-            Write-Host "    [-] $f (없음, 스킵)" -ForegroundColor DarkYellow
+            Write-Host "    [-] $f (missing, skipped)" -ForegroundColor DarkYellow
         }
     }
 
-    # scripts/ — 단, package-release.ps1 자기 자신은 제외 (배포에 불필요)
+    # scripts/ - exclude package-release.ps1 itself (build-time only)
     $scriptsStage = Join-Path $stageRoot 'scripts'
     New-Item -ItemType Directory -Path $scriptsStage | Out-Null
     Get-ChildItem -Path (Join-Path $projectRoot 'scripts') -File |
@@ -125,14 +126,14 @@ try {
             Write-Host "    [+] scripts\$($_.Name)" -ForegroundColor Gray
         }
 
-    # connector/ (Swagger 정의 — Copilot Studio Custom Connector용)
+    # connector/ (Swagger for Copilot Studio Custom Connector)
     $connectorSrc = Join-Path $projectRoot 'connector'
     if (Test-Path $connectorSrc) {
         Copy-Item -Recurse $connectorSrc $stageRoot -Force
         Write-Host "    [+] connector\" -ForegroundColor Gray
     }
 
-    # samples/ (MCP 테스트용 샘플 .pbix)
+    # samples/ (MCP smoke-test .pbix)
     $samplesSrc = Join-Path $projectRoot 'samples'
     if (Test-Path $samplesSrc) {
         Copy-Item -Recurse $samplesSrc $stageRoot -Force
@@ -140,7 +141,7 @@ try {
         Write-Host "    [+] samples\ ($pbixCount .pbix)" -ForegroundColor Gray
     }
 
-    # 버전 정보 파일
+    # version.json
     $versionInfo = @{
         version    = $Version
         builtAt    = (Get-Date -Format 'o')
@@ -151,9 +152,9 @@ try {
     Write-Host "    [+] version.json" -ForegroundColor Gray
 
     # ----------------------------------------------------------------------
-    # 3. zip 압축
+    # 3. Zip
     # ----------------------------------------------------------------------
-    Write-Host "[3/3] zip 압축..." -ForegroundColor Cyan
+    Write-Host "[3/3] Zipping..." -ForegroundColor Cyan
 
     if (-not (Test-Path $OutputDir)) {
         New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -161,7 +162,7 @@ try {
     $zipPath = Join-Path $OutputDir "$stageName.zip"
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 
-    # zip 안에 stageName 폴더가 보이도록 (Compress-Archive는 Path를 그대로 보존)
+    # Pass the staging directory itself so the zip preserves the top-level folder
     Compress-Archive -Path $stageRoot -DestinationPath $zipPath -CompressionLevel Optimal
 
     Remove-Item $stageRoot -Recurse -Force
@@ -173,10 +174,10 @@ try {
     Write-Host ("       {0:N2} MB" -f $size) -ForegroundColor Green
     Write-Host "=========================================================" -ForegroundColor Green
     Write-Host ""
-    Write-Host "다음 단계:" -ForegroundColor Cyan
-    Write-Host "  1) GitHub Releases에서 새 릴리스 생성"
-    Write-Host "  2) 위 zip을 asset으로 업로드"
-    Write-Host "  3) tag = v$Version (install.ps1의 자동 다운로드와 호환)"
+    Write-Host "Next steps:" -ForegroundColor Cyan
+    Write-Host "  1) Create a new release on GitHub"
+    Write-Host "  2) Upload the zip above as the release asset"
+    Write-Host "  3) Tag = v$Version (matches install.ps1's auto-download)"
     Write-Host ""
 }
 finally {
