@@ -158,20 +158,94 @@ function Test-Authenticode {
 }
 
 function Invoke-WebDownload {
-    param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$OutFile)
+    <#
+    Visible download with byte counter.
+    Streams chunks so the user always sees progress, even on slow networks.
+    Throws if the resulting file is smaller than $MinBytes (used to detect
+    HTML redirect pages saved as .exe).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$OutFile,
+        [long]$MinBytes = 0
+    )
     Write-Info "Downloading: $Url"
+    Remove-FileSafe -Path $OutFile
+
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $oldPref = $ProgressPreference
+    $req = [System.Net.HttpWebRequest]::Create($Url)
+    $req.AllowAutoRedirect = $true
+    $req.UserAgent = 'pbi-mcp-bridge-installer'
+    $req.Timeout = 30000
+    $req.ReadWriteTimeout = 30000
+
     try {
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -MaximumRedirection 10
-    } finally {
-        $ProgressPreference = $oldPref
+        $resp = $req.GetResponse()
+    } catch {
+        throw "HTTP error: $($_.Exception.Message)"
     }
+    try {
+        $totalBytes = $resp.ContentLength
+        $reader = $resp.GetResponseStream()
+        $writer = [System.IO.File]::Open($OutFile, 'Create')
+        try {
+            $buffer = New-Object byte[] (64 * 1024)
+            $downloaded = 0L
+            $lastReport = 0L
+            while ($true) {
+                $n = $reader.Read($buffer, 0, $buffer.Length)
+                if ($n -le 0) { break }
+                $writer.Write($buffer, 0, $n)
+                $downloaded += $n
+                # Print status every ~512KB so the console keeps moving
+                if (($downloaded - $lastReport) -ge (512 * 1024)) {
+                    $lastReport = $downloaded
+                    if ($totalBytes -gt 0) {
+                        $pct = [int](($downloaded * 100) / $totalBytes)
+                        $msg = "       {0,3}%  {1,7:N1} / {2,7:N1} MB" -f $pct, ($downloaded / 1MB), ($totalBytes / 1MB)
+                    } else {
+                        $msg = "       {0,7:N1} MB" -f ($downloaded / 1MB)
+                    }
+                    Write-Host "`r$msg" -NoNewline -ForegroundColor DarkGray
+                }
+            }
+        } finally {
+            $writer.Close()
+            $reader.Close()
+        }
+    } finally {
+        $resp.Close()
+    }
+    Write-Host ""  # finalize the progress line
+
     $sw.Stop()
     if (-not (Test-Path $OutFile)) { throw "Download failed: file was not created" }
-    $size = (Get-Item $OutFile).Length / 1MB
-    Write-Info ("Saved: {0:N1} MB ({1:N1}s)" -f $size, $sw.Elapsed.TotalSeconds)
+    $size = (Get-Item $OutFile).Length
+    $sizeMB = $size / 1MB
+    Write-Info ("Saved: {0:N1} MB ({1:N1}s) -> {2}" -f $sizeMB, $sw.Elapsed.TotalSeconds, $OutFile)
+
+    if ($MinBytes -gt 0 -and $size -lt $MinBytes) {
+        $minMB = $MinBytes / 1MB
+        Remove-FileSafe -Path $OutFile
+        throw ("Download too small ({0:N1} MB < expected at least {1:N1} MB). The URL likely redirected to an HTML page rather than the binary." -f $sizeMB, $minMB)
+    }
+}
+
+function Remove-FileSafe {
+    <#
+    Idempotent file delete that survives weird path resolution
+    (e.g. Korean usernames whose 8.3 short form can confuse Remove-Item).
+    Never throws.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    try {
+        if ([System.IO.File]::Exists($Path)) {
+            [System.IO.File]::Delete($Path)
+        }
+    } catch {
+        Write-Log ("Remove-FileSafe ignored: {0} ({1})" -f $Path, $_.Exception.Message) 'WARN'
+    }
 }
 
 function Test-Winget {
@@ -179,14 +253,22 @@ function Test-Winget {
 }
 
 function Invoke-Winget {
+    <#
+    Run winget with visible progress streamed to the console.
+    We DO NOT pass --silent because then the user sees nothing for several
+    minutes; instead we let winget print its progress bar live.
+    #>
     param([Parameter(Mandatory)][string]$Id, [string]$Name = $Id)
-    Write-Info "winget install --exact --id $Id"
-    $output = & winget install --exact --id $Id --silent `
-        --accept-package-agreements --accept-source-agreements 2>&1
+    Write-Info "winget install --exact --id $Id  (live progress below)"
+    Write-Host "    -----------------------------------------------------" -ForegroundColor DarkGray
+    & winget install --exact --id $Id `
+        --accept-package-agreements --accept-source-agreements `
+        --disable-interactivity
     $code = $LASTEXITCODE
-    Write-Log ("winget exit=$code output=$($output | Out-String)") 'WINGET'
-    # winget exit codes: 0 = success, 0x8A150006 = no applicable upgrade (already up-to-date)
-    if ($code -ne 0 -and $code -ne 0x8A150006) {
+    Write-Host "    -----------------------------------------------------" -ForegroundColor DarkGray
+    Write-Log ("winget exit=$code id=$Id") 'WINGET'
+    # winget exit codes: 0 = success, 0x8A150006 = already up-to-date (no upgrade applicable)
+    if ($code -ne 0 -and $code -ne -1978335214) {
         throw "winget install failed ($Name): exit $code"
     }
 }
@@ -270,25 +352,29 @@ function Test-DataGateway {
 
 function Install-DataGateway {
     # Official Microsoft Download Center installer.
-    # Resilient to URL changes because we verify the Authenticode signature after download.
+    # Trust comes from Authenticode signature verification, not the URL.
+    # MinBytes guards against the aka.ms shorteners returning an HTML page.
     $urls = @(
-        'https://aka.ms/OnPremisesDataGatewayStandardInstaller',
-        'https://download.microsoft.com/download/D/A/1/DA1FDDB8-6DA8-4F50-B4D0-18019591E182/GatewayInstall.exe'
+        'https://download.microsoft.com/download/D/A/1/DA1FDDB8-6DA8-4F50-B4D0-18019591E182/GatewayInstall.exe',
+        'https://aka.ms/OnPremisesDataGatewayStandardInstaller'
     )
     $tmp = Join-Path $env:TEMP "GatewayInstall.exe"
+    $minBytes = 50 * 1024 * 1024  # real installer is ~120 MB
 
     $downloaded = $false
     foreach ($u in $urls) {
         try {
-            Invoke-WebDownload -Url $u -OutFile $tmp
+            Invoke-WebDownload -Url $u -OutFile $tmp -MinBytes $minBytes
             $downloaded = $true
             break
         } catch {
-            Write-Warn "Download failed ($u): $_"
+            Write-Warn "Download attempt failed ($u): $_"
         }
     }
     if (-not $downloaded) {
-        Write-Host "    Manual download: https://powerbi.microsoft.com/gateway/" -ForegroundColor White
+        Remove-FileSafe -Path $tmp
+        Write-Warn "Could not auto-download the Gateway installer."
+        Write-Host "    Manual download page: https://powerbi.microsoft.com/gateway/" -ForegroundColor White
         if (Read-YesNo "Open the download page in a browser?" 'Y') {
             Start-Process 'https://powerbi.microsoft.com/gateway/'
         }
@@ -296,7 +382,7 @@ function Install-DataGateway {
     }
 
     if (-not (Test-Authenticode -FilePath $tmp)) {
-        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        Remove-FileSafe -Path $tmp
         throw "Gateway installer failed Microsoft Authenticode signature check. Aborting for security."
     }
     Write-Ok "Signature verified (Microsoft Corporation)"
@@ -311,12 +397,12 @@ function Install-DataGateway {
     Write-Host "    -----------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
     if (-not (Read-YesNo "Ready to launch the wizard?" 'Y')) {
-        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        Remove-FileSafe -Path $tmp
         Write-Warn "User cancelled Gateway install"
         return
     }
     Start-Process -FilePath $tmp -Wait
-    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    Remove-FileSafe -Path $tmp
 }
 
 function Step-DataGateway {
@@ -374,19 +460,14 @@ function Install-PowerBIMcp {
     $vsixTmp = Join-Path $env:TEMP 'powerbi-modeling-mcp.vsix'
     $extractRoot = Join-Path $env:TEMP ("pbi-mcp-extract-" + [Guid]::NewGuid().ToString('N'))
 
-    Invoke-WebDownload -Url $vsixUrl -OutFile $vsixTmp
-
-    if ((Get-Item $vsixTmp).Length -lt 100KB) {
-        Remove-Item $vsixTmp -Force -ErrorAction SilentlyContinue
-        throw "VSIX download too small. The URL may have changed."
-    }
+    Invoke-WebDownload -Url $vsixUrl -OutFile $vsixTmp -MinBytes (1 * 1024 * 1024)
 
     New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
     Expand-Archive -Path $vsixTmp -DestinationPath $extractRoot -Force
 
     $extensionRoot = Join-Path $extractRoot 'extension'
     if (-not (Test-Path $extensionRoot)) {
-        Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+        try { Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}
         throw "VSIX layout unexpected: missing 'extension' folder"
     }
 
@@ -405,7 +486,7 @@ function Install-PowerBIMcp {
     # Informational signature check (trust path is the Marketplace itself)
     $mcpExe = Join-Path $extensionRoot 'server\powerbi-modeling-mcp.exe'
     if (-not (Test-Path $mcpExe)) {
-        Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+        try { Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}
         throw "MCP executable not found in VSIX: server\powerbi-modeling-mcp.exe"
     }
     $sig = Get-AuthenticodeSignature -FilePath $mcpExe
@@ -427,8 +508,8 @@ function Install-PowerBIMcp {
     }
     Move-Item -Path $extensionRoot -Destination $targetDir -Force
 
-    Remove-Item $vsixTmp -Force -ErrorAction SilentlyContinue
-    Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-FileSafe -Path $vsixTmp
+    try { Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}
 
     Write-Ok "Installed at: $targetDir"
 }
@@ -598,31 +679,56 @@ if ($ep -eq 'Restricted' -or $ep -eq 'AllSigned') {
     }
 }
 
-# Run the steps
-try {
-    if ($SkipPowerBIDesktop) { Write-Step 1 "Power BI Desktop (skipped)" } else { Step-PowerBIDesktop }
-    if ($SkipGateway)        { Write-Step 2 "Gateway (skipped)" }            else { Step-DataGateway }
-    if ($SkipMcp)            { Write-Step 3 "MCP (skipped)" }                else { Step-PowerBIMcp }
-    if ($SkipBridge)         { Write-Step 4 "Bridge (skipped)" }             else { Step-Bridge }
-}
-catch {
-    Write-Host ""
-    Write-Err "Install error: $_"
-    Write-Log ($_ | Out-String) 'FATAL'
-    Write-Host "    Detailed log: $script:LogFile" -ForegroundColor Yellow
-    if (-not $NonInteractive) {
-        Write-Host ""
-        Read-Host "Press ENTER to exit"
+# Run the steps. Steps 1-3 are best-effort: if one fails, log a warning and
+# keep going so the user still ends up with a registered Bridge in Step 4.
+# Only Step 4 failure is fatal (the Bridge is the whole point).
+$stepFailures = @()
+
+function Invoke-Step {
+    param([string]$Label, [scriptblock]$Body, [bool]$Fatal = $false)
+    try {
+        & $Body
+    } catch {
+        $msg = "$Label failed: $_"
+        Write-Warn $msg
+        Write-Log ($_ | Out-String) 'STEP_ERROR'
+        $script:stepFailures += $Label
+        if ($Fatal) {
+            Write-Host ""
+            Write-Err "Fatal: cannot continue without $Label."
+            Write-Host "    Detailed log: $script:LogFile" -ForegroundColor Yellow
+            if (-not $NonInteractive) {
+                Write-Host ""
+                Read-Host "Press ENTER to exit"
+            }
+            exit 1
+        }
     }
-    exit 1
 }
+
+if ($SkipPowerBIDesktop) { Write-Step 1 "Power BI Desktop (skipped)" } else { Invoke-Step "Power BI Desktop" { Step-PowerBIDesktop } }
+if ($SkipGateway)        { Write-Step 2 "Gateway (skipped)" }            else { Invoke-Step "Gateway"          { Step-DataGateway } }
+if ($SkipMcp)            { Write-Step 3 "MCP (skipped)" }                else { Invoke-Step "MCP"              { Step-PowerBIMcp } }
+if ($SkipBridge)         { Write-Step 4 "Bridge (skipped)" }             else { Invoke-Step "Bridge"           { Step-Bridge } -Fatal $true }
 
 # Completion banner
 Write-Host ""
-Write-Host "=========================================================" -ForegroundColor Green
-Write-Host "  Install complete!" -ForegroundColor Green
-Write-Host "=========================================================" -ForegroundColor Green
-Write-Host ""
+if ($stepFailures.Count -gt 0) {
+    Write-Host "=========================================================" -ForegroundColor Yellow
+    Write-Host "  Install finished with warnings" -ForegroundColor Yellow
+    Write-Host "=========================================================" -ForegroundColor Yellow
+    Write-Host "  These steps reported a problem (see log for details):" -ForegroundColor Yellow
+    foreach ($f in $stepFailures) { Write-Host "    - $f" -ForegroundColor Yellow }
+    Write-Host ""
+    Write-Host "  The Bridge itself is registered and can still be started." -ForegroundColor Gray
+    Write-Host "  Re-run Install.bat after addressing the warnings to retry the failed steps." -ForegroundColor Gray
+    Write-Host ""
+} else {
+    Write-Host "=========================================================" -ForegroundColor Green
+    Write-Host "  Install complete!" -ForegroundColor Green
+    Write-Host "=========================================================" -ForegroundColor Green
+    Write-Host ""
+}
 $bridgeRoot = Split-Path $PSScriptRoot -Parent
 $samplePbix = Join-Path $bridgeRoot 'samples\BI-sample.pbix'
 Write-Host "Next steps:" -ForegroundColor Cyan
