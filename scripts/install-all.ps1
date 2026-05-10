@@ -519,24 +519,39 @@ function Install-PowerBIMcp {
 }
 
 function Step-PowerBIMcp {
-    Write-Step 3 "powerbi-modeling-mcp (MCP server)"
+    Write-Step 3 "MCP servers (Power BI + Filesystem)"
+
+    Write-Host "    The Bridge exposes two MCP tool families:" -ForegroundColor Gray
+    Write-Host "      a) Power BI MCP   - external (analysis-services.powerbi-modeling-mcp)" -ForegroundColor Gray
+    Write-Host "      b) Filesystem MCP - built into the Bridge .exe (no separate install)" -ForegroundColor Gray
+    Write-Host ""
+
+    # ---- (a) External Power BI MCP ----
+    Write-Host "  (a) Power BI MCP" -ForegroundColor Cyan
     $r = Test-PowerBIMcp
     if ($r.Found) {
         Write-Ok ("Already installed: $($r.Path)")
         Write-Info "Version folder: $($r.Source)"
-        return
+    } else {
+        Write-Warn "powerbi-modeling-mcp is not installed."
+        Write-Host "      Will download the official package from the VS Code Marketplace." -ForegroundColor Gray
+        if (-not (Read-YesNo "Install now? (~30-60 sec)" 'Y')) {
+            Write-Warn "Skipping Power BI MCP install. The Bridge will try to auto-download it on startup."
+        } else {
+            Install-PowerBIMcp
+            $r2 = Test-PowerBIMcp
+            if ($r2.Found) { Write-Ok "Verified: $($r2.Path)" }
+            else { throw "MCP exe not found after install" }
+        }
     }
-    Write-Warn "powerbi-modeling-mcp is not installed."
-    Write-Host "    Will download the official package from the VS Code Marketplace" -ForegroundColor Gray
-    Write-Host "    (analysis-services.powerbi-modeling-mcp)." -ForegroundColor Gray
-    if (-not (Read-YesNo "Install now? (~30-60 sec)" 'Y')) {
-        Write-Warn "Skipping MCP install. The Bridge will try to auto-download it on startup."
-        return
-    }
-    Install-PowerBIMcp
-    $r2 = Test-PowerBIMcp
-    if ($r2.Found) { Write-Ok "Verified: $($r2.Path)" }
-    else { throw "MCP exe not found after install" }
+
+    # ---- (b) Built-in Filesystem MCP ----
+    Write-Host ""
+    Write-Host "  (b) Filesystem MCP" -ForegroundColor Cyan
+    Write-Ok "Bundled into pbi-mcp-bridge.exe - no separate install needed."
+    Write-Info "Activated automatically in Step 4 below. Tools: read_file, write_file,"
+    Write-Info "list_directory, search_files, edit_file, create_directory, move_file,"
+    Write-Info "get_file_info, list_allowed_directories."
 }
 
 # ============================================================================
@@ -829,6 +844,23 @@ if ($stepFailures.Count -gt 0) {
 }
 $bridgeRoot = Split-Path $PSScriptRoot -Parent
 $samplePbix = Join-Path $bridgeRoot 'samples\BI-sample.pbix'
+
+# MCP availability summary - explicit so users don't have to guess what's exposed.
+Write-Host "MCP servers exposed by this Bridge:" -ForegroundColor Cyan
+$pbiMcp = Test-PowerBIMcp
+if ($pbiMcp.Found) {
+    Write-Host ("  [OK] Power BI MCP    - {0}" -f $pbiMcp.Path) -ForegroundColor Green
+} else {
+    Write-Host "  [!]  Power BI MCP    - not installed (Bridge will auto-download on first start)" -ForegroundColor Yellow
+}
+$bridgeExe = Join-Path $bridgeRoot 'pbi-mcp-bridge.exe'
+if (Test-Path $bridgeExe) {
+    Write-Host ("  [OK] Filesystem MCP  - built into {0}" -f $bridgeExe) -ForegroundColor Green
+} else {
+    Write-Host "  [!]  Filesystem MCP  - Bridge .exe missing" -ForegroundColor Yellow
+}
+Write-Host ""
+
 Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  1) Launch Power BI Desktop and open a .pbix file"
 if (Test-Path $samplePbix) {
