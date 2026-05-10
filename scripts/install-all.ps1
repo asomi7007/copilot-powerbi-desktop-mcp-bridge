@@ -434,9 +434,13 @@ function Step-DataGateway {
 # [3] powerbi-modeling-mcp (MCP server)
 # ============================================================================
 function Test-PowerBIMcp {
+    # Each Join-Path must be parenthesized: PowerShell's `,` has higher precedence
+    # than the array constructor, so without parens it would be parsed as
+    # Join-Path with a 2-element array as ChildPath, throwing
+    # "Cannot convert 'System.Object[]' to type 'System.String'".
     $vscodeDirs = @(
-        Join-Path $env:USERPROFILE '.vscode\extensions',
-        Join-Path $env:USERPROFILE '.vscode-insiders\extensions'
+        (Join-Path $env:USERPROFILE '.vscode\extensions'),
+        (Join-Path $env:USERPROFILE '.vscode-insiders\extensions')
     )
     foreach ($base in $vscodeDirs) {
         if (-not (Test-Path $base)) { continue }
@@ -538,27 +542,122 @@ function Step-PowerBIMcp {
 # ============================================================================
 # [4] Bridge itself
 # ============================================================================
-function New-DesktopShortcut {
-    param([Parameter(Mandatory)][string]$ProjectRoot)
-    $desktop = [Environment]::GetFolderPath('Desktop')
-    $shortcutPath = Join-Path $desktop 'Power BI MCP Bridge.lnk'
-    $startScript = Join-Path $ProjectRoot 'scripts\start.ps1'
-    if (-not (Test-Path $startScript)) {
-        Write-Warn "start.ps1 missing - skipping shortcut: $startScript"
-        return
-    }
+function New-BatLauncher {
+    <#
+    Write a one-line .bat in the project root that wraps a PowerShell script.
+    Bat content is ASCII only so it works on any locale's cmd.exe.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$BatPath,
+        [Parameter(Mandatory)][string]$RelScript,
+        [Parameter(Mandatory)][string]$Title
+    )
+    $content = @"
+@echo off
+setlocal
+chcp 65001 > nul
+title $Title
+powershell.exe -NoExit -ExecutionPolicy Bypass -File "%~dp0$RelScript"
+"@
+    Set-Content -Path $BatPath -Value $content -Encoding ASCII -Force
+}
+
+function New-WshShortcut {
+    <#
+    Best-effort .lnk creation via WScript.Shell. Returns $true on success.
+    Korean OneDrive desktop paths sometimes break WScript.Shell, so callers
+    should fall back to another folder if this returns $false.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ShortcutPath,
+        [Parameter(Mandatory)][string]$TargetScript,
+        [Parameter(Mandatory)][string]$WorkingDir,
+        [Parameter(Mandatory)][string]$Description
+    )
     try {
         $sh = New-Object -ComObject WScript.Shell
-        $sc = $sh.CreateShortcut($shortcutPath)
+        $sc = $sh.CreateShortcut($ShortcutPath)
         $sc.TargetPath = 'powershell.exe'
-        $sc.Arguments = "-NoExit -ExecutionPolicy Bypass -File `"$startScript`""
-        $sc.WorkingDirectory = $ProjectRoot
+        $sc.Arguments = "-NoExit -ExecutionPolicy Bypass -File `"$TargetScript`""
+        $sc.WorkingDirectory = $WorkingDir
         $sc.IconLocation = 'powershell.exe,0'
-        $sc.Description = 'Start Power BI MCP Bridge'
+        $sc.Description = $Description
         $sc.Save()
-        Write-Ok "Desktop shortcut: $shortcutPath"
+        return $true
     } catch {
-        Write-Warn "Shortcut creation failed: $_"
+        Write-Log ("Shortcut '$ShortcutPath' failed: $($_.Exception.Message)") 'WARN'
+        return $false
+    }
+}
+
+function New-LaunchEntries {
+    <#
+    Always create Start Bridge.bat and Stop Bridge.bat in the project root
+    (works without PowerShell ExecutionPolicy headaches and is location-stable).
+    Then, if requested, also try to drop matching .lnk files on the desktop.
+    Falls back to the public desktop (C:\Users\Public\Desktop) when the
+    user's OneDrive-redirected desktop path fails.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [bool]$DesktopShortcut = $true
+    )
+
+    $entries = @(
+        @{
+            BatName = 'Start Bridge.bat'
+            LnkName = 'Power BI MCP Bridge - Start.lnk'
+            RelScript = 'scripts\start.ps1'
+            Title = 'Start Bridge'
+            Desc = 'Start Power BI MCP Bridge'
+        },
+        @{
+            BatName = 'Stop Bridge.bat'
+            LnkName = 'Power BI MCP Bridge - Stop.lnk'
+            RelScript = 'scripts\stop.ps1'
+            Title = 'Stop Bridge'
+            Desc = 'Stop Power BI MCP Bridge'
+        }
+    )
+
+    foreach ($e in $entries) {
+        $batPath = Join-Path $ProjectRoot $e.BatName
+        try {
+            New-BatLauncher -BatPath $batPath -RelScript $e.RelScript -Title $e.Title
+            Write-Ok ("Launcher created: {0}" -f $batPath)
+        } catch {
+            Write-Warn ("Failed to write {0}: {1}" -f $batPath, $_.Exception.Message)
+        }
+    }
+
+    if (-not $DesktopShortcut) {
+        Write-Info "Skipping desktop shortcuts (use the .bat files in the project folder)"
+        return
+    }
+
+    # Two desktop candidates: user's (may be OneDrive-redirected to a path
+    # WScript.Shell rejects), and the all-users public desktop.
+    $desktops = @()
+    $userDesktop = [Environment]::GetFolderPath('Desktop')
+    if ($userDesktop) { $desktops += $userDesktop }
+    $publicDesktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+    if ($publicDesktop -and ($publicDesktop -ne $userDesktop)) { $desktops += $publicDesktop }
+
+    foreach ($e in $entries) {
+        $targetScript = Join-Path $ProjectRoot $e.RelScript
+        $created = $false
+        foreach ($d in $desktops) {
+            $lnkPath = Join-Path $d $e.LnkName
+            $ok = New-WshShortcut -ShortcutPath $lnkPath -TargetScript $targetScript -WorkingDir $ProjectRoot -Description $e.Desc
+            if ($ok) {
+                Write-Ok ("Desktop shortcut: {0}" -f $lnkPath)
+                $created = $true
+                break
+            }
+        }
+        if (-not $created) {
+            Write-Warn ("Could not create desktop shortcut for '{0}'. Use the .bat launcher in the Bridge folder instead." -f $e.LnkName)
+        }
     }
 }
 
@@ -588,13 +687,12 @@ function Initialize-LocalBridge {
         Write-Info "Filesystem sandbox exists: $workspace"
     }
 
-    if (Read-YesNo "Create a desktop shortcut?" 'Y') {
-        New-DesktopShortcut -ProjectRoot $ProjectRoot
-    }
+    $createDesktop = Read-YesNo "Create desktop shortcuts (Start + Stop)?" 'Y'
+    New-LaunchEntries -ProjectRoot $ProjectRoot -DesktopShortcut $createDesktop
 
     Write-Host ""
     Write-Host "    Bridge location: $ProjectRoot" -ForegroundColor Gray
-    Write-Host "    Start command  : .\scripts\start.ps1" -ForegroundColor Gray
+    Write-Host "    Launchers     : Start Bridge.bat / Stop Bridge.bat (in the Bridge folder)" -ForegroundColor Gray
 }
 
 function Step-Bridge {
@@ -736,9 +834,12 @@ Write-Host "  1) Launch Power BI Desktop and open a .pbix file"
 if (Test-Path $samplePbix) {
     Write-Host "       Sample model: $samplePbix" -ForegroundColor DarkGray
 }
-Write-Host "  2) Start the Bridge (or double-click the desktop shortcut):" -ForegroundColor White
-Write-Host "       cd `"$bridgeRoot`"" -ForegroundColor DarkGray
-Write-Host "       .\scripts\start.ps1" -ForegroundColor DarkGray
+Write-Host "  2) Start the Bridge:" -ForegroundColor White
+Write-Host "       Easiest: double-click 'Start Bridge.bat' in the Bridge folder" -ForegroundColor DarkGray
+Write-Host "                or use the desktop shortcut if one was created" -ForegroundColor DarkGray
+Write-Host "       Manual : cd `"$bridgeRoot`"" -ForegroundColor DarkGray
+Write-Host "                .\scripts\start.ps1" -ForegroundColor DarkGray
+Write-Host "       To stop: double-click 'Stop Bridge.bat' or use the Stop shortcut" -ForegroundColor DarkGray
 Write-Host "  3) Open http://localhost:5050/health to confirm"
 $workspaceHint = Join-Path $bridgeRoot 'workspace'
 if (Test-Path $workspaceHint) {
